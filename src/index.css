@@ -1,0 +1,65 @@
+.over {
+  z-index: 10;
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  right: 0;
+  pointer-events: none;
+
+  text-align: center;
+  color: white;
+  font-family: 'Nunito', monospace;
+  text-shadow: 0 0 5px rgba(0, 0, 0, 0.75);
+}
+
+#promptText {
+  font-size: 1.4em;
+  top: 5vh;
+  position: absolute;
+  left: 50%;
+  transform: translate(-50%, 0);
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: rgba(9, 20, 31, 0.58);
+  pointer-events: none;
+}
+
+.controls {
+  position: absolute;
+  left: 50%;
+  bottom: 9vh;
+  transform: translate(-50%, 0);
+  display: flex;
+  gap: 10px;
+  pointer-events: auto;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.controls button {
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 16px;
+  color: #0d1a26;
+  background: #e6f4ff;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.controls button:active {
+  transform: translateY(1px);
+}
+
+#statusText {
+  position: absolute;
+  left: 50%;
+  bottom: 2.5vh;
+  transform: translate(-50%, 0);
+  min-width: min(90vw, 360px);
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(5, 15, 24, 0.68);
+  font-size: 0.95em;
+  pointer-events: none;
+}
