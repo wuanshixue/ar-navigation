@@ -1,11 +1,14 @@
 [
   {
     "id": "demo-route",
+    "positionMode": "scene",
     "triggerPoint": {"x": 0, "y": 0, "z": -2.2},
+    "triggerGps": null,
     "enterRadius": 2.0,
     "exitRadius": 3.3,
     "autoStart": true,
     "once": false,
+    "pointsGps": [],
     "points": [
       {"x": 0, "y": 0.05, "z": -2.2},
       {"x": -0.8, "y": 0.05, "z": -9.6},
@@ -15,11 +18,14 @@
   },
   {
     "id": "return-route",
+    "positionMode": "scene",
     "triggerPoint": {"x": -10.8, "y": 0, "z": -1.6},
+    "triggerGps": null,
     "enterRadius": 1.8,
     "exitRadius": 2.8,
     "autoStart": true,
     "once": false,
+    "pointsGps": [],
     "points": [
       {"x": -10.8, "y": 0.2, "z": -1.6},
       {"x": -10.6, "y": 0.05, "z": -3.8},
@@ -29,11 +35,14 @@
   },
   {
     "id": "gallery-route",
+    "positionMode": "scene",
     "triggerPoint": {"x": 4.6, "y": 0, "z": -2.8},
+    "triggerGps": null,
     "enterRadius": 1.6,
     "exitRadius": 2.6,
     "autoStart": true,
     "once": false,
+    "pointsGps": [],
     "points": [
       {"x": 4.6, "y": 0.05, "z": -2.8},
       {"x": 5.9, "y": 0.05, "z": -4.9},

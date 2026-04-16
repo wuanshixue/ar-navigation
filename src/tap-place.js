@@ -10,9 +10,11 @@ export const tapPlaceComponent = {
     this.camera = document.getElementById('camera')
     this.prompt = document.getElementById('promptText')
     this.statusText = document.getElementById('statusText')
+    this.debugModeText = document.getElementById('debugModeText')
     this.debugTriggerText = document.getElementById('debugTriggerText')
     this.debugArmedText = document.getElementById('debugArmedText')
     this.debugRouteText = document.getElementById('debugRouteText')
+    this.debugGpsText = document.getElementById('debugGpsText')
     this.startButton = document.getElementById('startNavBtn')
     this.undoButton = document.getElementById('undoPointBtn')
     this.clearButton = document.getElementById('clearRouteBtn')
@@ -24,7 +26,12 @@ export const tapPlaceComponent = {
     this.triggerEntities = []
     this.navigationActive = false
     this.currentTargetIndex = 1
-    this.triggerRoutes = triggerRoutes
+    this.triggerRoutes = triggerRoutes.map(route => ({
+      ...route,
+      positionMode: route.positionMode ?? 'scene',
+      triggerGps: route.triggerGps ?? null,
+      pointsGps: route.pointsGps ?? [],
+    }))
     this.activeTriggerId = null
     this.triggerLockId = null
     this.firedTriggers = new Set()
@@ -33,6 +40,13 @@ export const tapPlaceComponent = {
     this.triggerArmed = true
     this.nearestTriggerId = null
     this.nearestTriggerDistance = null
+    this.currentGpsPosition = null
+    this.gpsAccuracy = null
+    this.gpsUpdatedAt = null
+    this.gpsReady = false
+    this.gpsError = null
+    this.gpsSupported = typeof navigator !== 'undefined' && 'geolocation' in navigator
+    this.gpsWatchId = null
     this.tempCam = new AFRAME.THREE.Vector3()
     this.tempTarget = new AFRAME.THREE.Vector3()
 
@@ -49,6 +63,7 @@ export const tapPlaceComponent = {
     this.recenterButton.addEventListener('click', this.onRecenter)
 
     this.renderTriggerMarkers()
+    this.startGeolocationWatch()
     this.updateDebugPanel()
     this.updateStatus('点击地面设置起点和终点')
   },
@@ -59,6 +74,7 @@ export const tapPlaceComponent = {
     this.clearButton.removeEventListener('click', this.onClearRoute)
     this.recenterButton.removeEventListener('click', this.onRecenter)
     this.triggerEntities.forEach(entity => entity.remove())
+    this.stopGeolocationWatch()
   },
   onGroundClick(event) {
     if (!event.detail || !event.detail.intersection || !event.detail.intersection.point) {
@@ -174,6 +190,10 @@ export const tapPlaceComponent = {
     this.triggerEntities = []
 
     this.triggerRoutes.forEach((trigger) => {
+      if (this.getRoutePositionMode(trigger) !== 'scene' || !trigger.triggerPoint) {
+        return
+      }
+
       if (trigger.once && this.firedTriggers.has(trigger.id)) {
         return
       }
@@ -267,7 +287,7 @@ export const tapPlaceComponent = {
     this.triggerArmed = false
     this.clearRouteEntities()
 
-    this.routePoints = trigger.points.map(point => ({...point}))
+    this.routePoints = (trigger.points || []).map(point => ({...point}))
     this.routePoints.forEach(point => this.addMarker(point))
     this.renderRoute()
     if (this.routePoints[0]) {
@@ -300,6 +320,65 @@ export const tapPlaceComponent = {
     const enterRadius = this.getTriggerEnterRadius(trigger)
     return trigger.exitRadius ?? Math.max(enterRadius + 0.7, enterRadius * 1.35)
   },
+  getRoutePositionMode(route) {
+    return route.positionMode ?? 'scene'
+  },
+  startGeolocationWatch() {
+    if (!this.gpsSupported) {
+      this.gpsError = '当前浏览器不支持定位'
+      this.updateDebugPanel()
+      return
+    }
+
+    this.gpsWatchId = navigator.geolocation.watchPosition(
+      (position) => this.onGeolocationSuccess(position),
+      (error) => this.onGeolocationError(error),
+      {
+        enableHighAccuracy: true,
+        maximumAge: 1000,
+        timeout: 15000,
+      }
+    )
+  },
+  stopGeolocationWatch() {
+    if (!this.gpsSupported || this.gpsWatchId == null) {
+      return
+    }
+
+    navigator.geolocation.clearWatch(this.gpsWatchId)
+    this.gpsWatchId = null
+  },
+  onGeolocationSuccess(position) {
+    this.currentGpsPosition = {
+      lat: position.coords.latitude,
+      lng: position.coords.longitude,
+    }
+    this.gpsAccuracy = position.coords.accuracy
+    this.gpsUpdatedAt = Date.now()
+    this.gpsReady = true
+    this.gpsError = null
+    this.updateDebugPanel()
+
+    if (!this.activeTriggerId) {
+      this.updateStatus(`定位已就绪，精度约 ${this.gpsAccuracy.toFixed(0)}m`)
+    }
+  },
+  onGeolocationError(error) {
+    this.gpsReady = false
+    this.gpsError = error?.message || '定位失败'
+    this.updateDebugPanel()
+
+    if (!this.activeTriggerId) {
+      this.updateStatus(`定位不可用：${this.gpsError}`)
+    }
+  },
+  formatGpsPosition() {
+    if (!this.currentGpsPosition) {
+      return '-'
+    }
+
+    return `${this.currentGpsPosition.lat.toFixed(6)}, ${this.currentGpsPosition.lng.toFixed(6)}`
+  },
   findTriggerById(triggerId) {
     return this.triggerRoutes.find(trigger => trigger.id === triggerId) || null
   },
@@ -309,7 +388,7 @@ export const tapPlaceComponent = {
     }
 
     const lockedTrigger = this.findTriggerById(this.triggerLockId)
-    if (!lockedTrigger) {
+    if (!lockedTrigger || this.getRoutePositionMode(lockedTrigger) !== 'scene' || !lockedTrigger.triggerPoint) {
       this.triggerArmed = true
       this.triggerLockId = null
       return
@@ -330,6 +409,10 @@ export const tapPlaceComponent = {
     let nearestDistance = Number.POSITIVE_INFINITY
 
     this.triggerRoutes.forEach((trigger) => {
+      if (this.getRoutePositionMode(trigger) !== 'scene' || !trigger.triggerPoint) {
+        return
+      }
+
       if (trigger.once && this.firedTriggers.has(trigger.id)) {
         return
       }
@@ -347,6 +430,12 @@ export const tapPlaceComponent = {
     this.nearestTriggerDistance = nearestTrigger ? nearestDistance : null
   },
   updateDebugPanel() {
+    if (this.debugModeText) {
+      const activeRoute = this.activeTriggerId ? this.findTriggerById(this.activeTriggerId) : null
+      const mode = activeRoute ? this.getRoutePositionMode(activeRoute) : 'scene'
+      this.debugModeText.textContent = `Mode: ${mode} | GPS ready: ${this.gpsReady ? 'yes' : 'no'}`
+    }
+
     if (this.debugTriggerText) {
       const nearestLabel = this.nearestTriggerId
         ? `${this.nearestTriggerId} (${this.nearestTriggerDistance.toFixed(2)}m)`
@@ -363,6 +452,13 @@ export const tapPlaceComponent = {
       const activeRoute = this.activeTriggerId || 'manual'
       const firedSummary = this.firedTriggers.size > 0 ? [...this.firedTriggers].join(', ') : '-'
       this.debugRouteText.textContent = `Route: ${activeRoute} | Fired: ${firedSummary}`
+    }
+
+    if (this.debugGpsText) {
+      const accuracyLabel = this.gpsAccuracy != null ? `${this.gpsAccuracy.toFixed(1)}m` : '-'
+      const updatedLabel = this.gpsUpdatedAt ? new Date(this.gpsUpdatedAt).toLocaleTimeString() : '-'
+      const errorLabel = this.gpsError ? ` | Error: ${this.gpsError}` : ''
+      this.debugGpsText.textContent = `GPS: ${this.formatGpsPosition()} | Acc: ${accuracyLabel} | Updated: ${updatedLabel}${errorLabel}`
     }
   },
   checkTriggerRoutes() {
@@ -385,6 +481,10 @@ export const tapPlaceComponent = {
     }
 
     for (const trigger of this.triggerRoutes) {
+      if (this.getRoutePositionMode(trigger) !== 'scene' || !trigger.triggerPoint) {
+        continue
+      }
+
       if (trigger.once && this.firedTriggers.has(trigger.id)) {
         continue
       }
