@@ -15,6 +15,7 @@ export const tapPlaceComponent = {
     this.debugArmedText = document.getElementById('debugArmedText')
     this.debugRouteText = document.getElementById('debugRouteText')
     this.debugGpsText = document.getElementById('debugGpsText')
+    this.debugDiagText = document.getElementById('debugDiagText')
     this.startButton = document.getElementById('startNavBtn')
     this.undoButton = document.getElementById('undoPointBtn')
     this.clearButton = document.getElementById('clearRouteBtn')
@@ -47,8 +48,11 @@ export const tapPlaceComponent = {
     this.gpsError = null
     this.gpsSupported = typeof navigator !== 'undefined' && 'geolocation' in navigator
     this.gpsWatchId = null
+    this.gpsAnchor = null
+    this.lastDiagnostic = 'init'
     this.tempCam = new AFRAME.THREE.Vector3()
     this.tempTarget = new AFRAME.THREE.Vector3()
+    this.tempForward = new AFRAME.THREE.Vector3()
 
     this.onGroundClick = this.onGroundClick.bind(this)
     this.onStartNavigation = this.onStartNavigation.bind(this)
@@ -272,6 +276,26 @@ export const tapPlaceComponent = {
     this.el.sceneEl.appendChild(flag)
     this.routeEntities.push(flag)
   },
+  addDiagnosticBeacon(point, color = '#ff4d6d') {
+    const beacon = document.createElement('a-entity')
+    beacon.setAttribute('position', `${point.x} ${point.y} ${point.z}`)
+
+    const orb = document.createElement('a-sphere')
+    orb.setAttribute('position', '0 0.28 0')
+    orb.setAttribute('radius', 0.18)
+    orb.setAttribute('material', `color: ${color}; emissive: ${color}; emissiveIntensity: 0.85; opacity: 0.92`)
+
+    const column = document.createElement('a-cylinder')
+    column.setAttribute('position', '0 1.1 0')
+    column.setAttribute('radius', 0.07)
+    column.setAttribute('height', 2.2)
+    column.setAttribute('material', `color: ${color}; emissive: ${color}; emissiveIntensity: 0.55; opacity: 0.3`)
+
+    beacon.appendChild(orb)
+    beacon.appendChild(column)
+    this.el.sceneEl.appendChild(beacon)
+    this.routeEntities.push(beacon)
+  },
   clearRouteEntities() {
     this.routePoints = []
     this.markerEntities.forEach(entity => entity.remove())
@@ -287,11 +311,15 @@ export const tapPlaceComponent = {
     this.triggerArmed = false
     this.clearRouteEntities()
 
-    this.routePoints = (trigger.points || []).map(point => ({...point}))
+    this.routePoints = this.getRouteScenePoints(trigger)
     this.routePoints.forEach(point => this.addMarker(point))
     this.renderRoute()
     if (this.routePoints[0]) {
       this.addStartFlag(this.routePoints[0])
+      this.addDiagnosticBeacon(this.routePoints[0], '#ff4d6d')
+    }
+    if (this.gpsAnchor?.scene) {
+      this.addDiagnosticBeacon(this.gpsAnchor.scene, '#7c3aed')
     }
 
     if (trigger.once) {
@@ -311,6 +339,7 @@ export const tapPlaceComponent = {
       const startPoint = this.routePoints[0]
       this.prompt.textContent = `已加载预设路线: ${trigger.id}，起点约在 x=${startPoint.x.toFixed(1)} z=${startPoint.z.toFixed(1)}`
     }
+    this.lastDiagnostic = `activated ${trigger.id} mode=${this.getRoutePositionMode(trigger)} points=${this.routePoints.length}`
     this.updateDebugPanel()
   },
   getTriggerEnterRadius(trigger) {
@@ -322,6 +351,113 @@ export const tapPlaceComponent = {
   },
   getRoutePositionMode(route) {
     return route.positionMode ?? 'scene'
+  },
+  getRouteSceneAnchor(trigger) {
+    if (this.getRoutePositionMode(trigger) === 'gps' && this.camera && this.camera.object3D) {
+      this.camera.object3D.getWorldPosition(this.tempCam)
+      this.camera.object3D.getWorldDirection(this.tempForward)
+
+      const horizontalLength = Math.sqrt(
+        this.tempForward.x * this.tempForward.x + this.tempForward.z * this.tempForward.z
+      )
+
+      if (horizontalLength > 0.001) {
+        const normalizedX = this.tempForward.x / horizontalLength
+        const normalizedZ = this.tempForward.z / horizontalLength
+
+        return {
+          x: this.tempCam.x + normalizedX * 1.4,
+          y: 0.05,
+          z: this.tempCam.z + normalizedZ * 1.4,
+        }
+      }
+    }
+
+    const basePoint = trigger.triggerPoint || trigger.points?.[0] || {x: 0, y: 0.05, z: -2.2}
+    return {
+      x: basePoint.x,
+      y: basePoint.y ?? 0.05,
+      z: basePoint.z,
+    }
+  },
+  hasGpsTrigger(route) {
+    return this.getRoutePositionMode(route) === 'gps' && route.triggerGps
+      && typeof route.triggerGps.lat === 'number' && typeof route.triggerGps.lng === 'number'
+  },
+  hasGpsPoints(route) {
+    return Array.isArray(route.pointsGps) && route.pointsGps.length >= 2
+      && route.pointsGps.every(point => typeof point.lat === 'number' && typeof point.lng === 'number')
+  },
+  getMetersOffsetBetweenGpsPoints(origin, target) {
+    const metersPerLatDegree = 111320
+    const avgLatRad = ((origin.lat + target.lat) / 2) * (Math.PI / 180)
+    const metersPerLngDegree = 111320 * Math.cos(avgLatRad)
+
+    return {
+      eastMeters: (target.lng - origin.lng) * metersPerLngDegree,
+      northMeters: (target.lat - origin.lat) * metersPerLatDegree,
+    }
+  },
+  rotateGpsOffsetToScene(offset, transformAngle) {
+    const cosAngle = Math.cos(transformAngle)
+    const sinAngle = Math.sin(transformAngle)
+
+    return {
+      x: offset.eastMeters * cosAngle - offset.northMeters * sinAngle,
+      z: offset.eastMeters * sinAngle + offset.northMeters * cosAngle,
+    }
+  },
+  getGpsSceneTransformAngle(trigger) {
+    if (!this.camera || !this.camera.object3D || !this.hasGpsPoints(trigger) || trigger.pointsGps.length < 2) {
+      return 0
+    }
+
+    const firstOffset = this.getMetersOffsetBetweenGpsPoints(trigger.pointsGps[0], trigger.pointsGps[1])
+    const gpsAngle = Math.atan2(-firstOffset.northMeters, firstOffset.eastMeters)
+
+    this.camera.object3D.getWorldDirection(this.tempForward)
+    const horizontalLength = Math.sqrt(
+      this.tempForward.x * this.tempForward.x + this.tempForward.z * this.tempForward.z
+    )
+
+    if (horizontalLength <= 0.001) {
+      return 0
+    }
+
+    const forwardX = this.tempForward.x / horizontalLength
+    const forwardZ = this.tempForward.z / horizontalLength
+    const sceneAngle = Math.atan2(forwardZ, forwardX)
+
+    return sceneAngle - gpsAngle
+  },
+  convertGpsPointToScenePoint(originGps, targetGps, anchorPoint, transformAngle = 0) {
+    const offset = this.getMetersOffsetBetweenGpsPoints(originGps, targetGps)
+    const rotatedOffset = this.rotateGpsOffsetToScene(offset, transformAngle)
+    return {
+      x: anchorPoint.x + rotatedOffset.x,
+      y: anchorPoint.y,
+      z: anchorPoint.z + rotatedOffset.z,
+    }
+  },
+  getRouteScenePoints(trigger) {
+    if (this.getRoutePositionMode(trigger) === 'gps' && this.hasGpsPoints(trigger)) {
+      const anchorPoint = this.getRouteSceneAnchor(trigger)
+      const anchorGps = trigger.triggerGps || trigger.pointsGps[0]
+      const transformAngle = this.getGpsSceneTransformAngle(trigger)
+      this.gpsAnchor = {
+        routeId: trigger.id,
+        gps: {...anchorGps},
+        scene: {...anchorPoint},
+        transformAngle,
+      }
+
+      return trigger.pointsGps.map(point => (
+        this.convertGpsPointToScenePoint(anchorGps, point, anchorPoint, transformAngle)
+      ))
+    }
+
+    this.gpsAnchor = null
+    return (trigger.points || []).map(point => ({...point}))
   },
   startGeolocationWatch() {
     if (!this.gpsSupported) {
@@ -379,24 +515,70 @@ export const tapPlaceComponent = {
 
     return `${this.currentGpsPosition.lat.toFixed(6)}, ${this.currentGpsPosition.lng.toFixed(6)}`
   },
+  getGpsDistanceMeters(from, to) {
+    const earthRadius = 6371000
+    const lat1 = from.lat * (Math.PI / 180)
+    const lat2 = to.lat * (Math.PI / 180)
+    const deltaLat = (to.lat - from.lat) * (Math.PI / 180)
+    const deltaLng = (to.lng - from.lng) * (Math.PI / 180)
+    const a = Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2)
+      + Math.cos(lat1) * Math.cos(lat2)
+      * Math.sin(deltaLng / 2) * Math.sin(deltaLng / 2)
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+    return earthRadius * c
+  },
+  getDistanceToTrigger(trigger, cameraPosition) {
+    if (this.getRoutePositionMode(trigger) === 'gps') {
+      if (!this.gpsReady || !this.currentGpsPosition || !this.hasGpsTrigger(trigger)) {
+        return null
+      }
+
+      return this.getGpsDistanceMeters(this.currentGpsPosition, trigger.triggerGps)
+    }
+
+    if (!trigger.triggerPoint || !cameraPosition) {
+      return null
+    }
+
+    this.tempTarget.set(trigger.triggerPoint.x, trigger.triggerPoint.y, trigger.triggerPoint.z)
+    return this.getHorizontalDistance(cameraPosition, this.tempTarget)
+  },
   findTriggerById(triggerId) {
     return this.triggerRoutes.find(trigger => trigger.id === triggerId) || null
   },
   updateTriggerArming() {
-    if (!this.camera || !this.camera.object3D || this.triggerArmed || !this.triggerLockId) {
+    if ((!this.camera || !this.camera.object3D) && !this.gpsReady) {
+      return
+    }
+
+    if (this.triggerArmed || !this.triggerLockId) {
       return
     }
 
     const lockedTrigger = this.findTriggerById(this.triggerLockId)
-    if (!lockedTrigger || this.getRoutePositionMode(lockedTrigger) !== 'scene' || !lockedTrigger.triggerPoint) {
+    if (!lockedTrigger) {
       this.triggerArmed = true
       this.triggerLockId = null
       return
     }
 
-    this.camera.object3D.getWorldPosition(this.tempCam)
-    this.tempTarget.set(lockedTrigger.triggerPoint.x, lockedTrigger.triggerPoint.y, lockedTrigger.triggerPoint.z)
-    const distance = this.getHorizontalDistance(this.tempCam, this.tempTarget)
+    const routeMode = this.getRoutePositionMode(lockedTrigger)
+    let distance = null
+
+    if (routeMode === 'gps') {
+      distance = this.getDistanceToTrigger(lockedTrigger, null)
+    } else {
+      if (!this.camera || !this.camera.object3D) {
+        return
+      }
+
+      this.camera.object3D.getWorldPosition(this.tempCam)
+      distance = this.getDistanceToTrigger(lockedTrigger, this.tempCam)
+    }
+
+    if (distance == null) {
+      return
+    }
 
     if (distance >= this.getTriggerExitRadius(lockedTrigger)) {
       this.triggerArmed = true
@@ -409,16 +591,14 @@ export const tapPlaceComponent = {
     let nearestDistance = Number.POSITIVE_INFINITY
 
     this.triggerRoutes.forEach((trigger) => {
-      if (this.getRoutePositionMode(trigger) !== 'scene' || !trigger.triggerPoint) {
-        return
-      }
-
       if (trigger.once && this.firedTriggers.has(trigger.id)) {
         return
       }
 
-      this.tempTarget.set(trigger.triggerPoint.x, trigger.triggerPoint.y, trigger.triggerPoint.z)
-      const distance = this.getHorizontalDistance(cameraPosition, this.tempTarget)
+      const distance = this.getDistanceToTrigger(trigger, cameraPosition)
+      if (distance == null) {
+        return
+      }
 
       if (distance < nearestDistance) {
         nearestTrigger = trigger
@@ -451,7 +631,10 @@ export const tapPlaceComponent = {
     if (this.debugRouteText) {
       const activeRoute = this.activeTriggerId || 'manual'
       const firedSummary = this.firedTriggers.size > 0 ? [...this.firedTriggers].join(', ') : '-'
-      this.debugRouteText.textContent = `Route: ${activeRoute} | Fired: ${firedSummary}`
+      const anchorSummary = this.gpsAnchor
+        ? ` | Anchor: ${this.gpsAnchor.routeId} @ ${this.gpsAnchor.scene.x.toFixed(1)},${this.gpsAnchor.scene.z.toFixed(1)}`
+        : ''
+      this.debugRouteText.textContent = `Route: ${activeRoute} | Fired: ${firedSummary}${anchorSummary}`
     }
 
     if (this.debugGpsText) {
@@ -460,14 +643,22 @@ export const tapPlaceComponent = {
       const errorLabel = this.gpsError ? ` | Error: ${this.gpsError}` : ''
       this.debugGpsText.textContent = `GPS: ${this.formatGpsPosition()} | Acc: ${accuracyLabel} | Updated: ${updatedLabel}${errorLabel}`
     }
+
+    if (this.debugDiagText) {
+      this.debugDiagText.textContent = `Diag: ${this.lastDiagnostic}`
+    }
   },
   checkTriggerRoutes() {
-    if (!this.camera || !this.camera.object3D) {
+    const hasSceneCamera = this.camera && this.camera.object3D
+    if (!hasSceneCamera && !this.gpsReady) {
       return
     }
 
-    this.camera.object3D.getWorldPosition(this.tempCam)
-    this.updateNearestTrigger(this.tempCam)
+    if (hasSceneCamera) {
+      this.camera.object3D.getWorldPosition(this.tempCam)
+    }
+
+    this.updateNearestTrigger(hasSceneCamera ? this.tempCam : null)
     this.updateTriggerArming()
 
     if (!this.triggerArmed) {
@@ -480,27 +671,55 @@ export const tapPlaceComponent = {
       return
     }
 
-    for (const trigger of this.triggerRoutes) {
-      if (this.getRoutePositionMode(trigger) !== 'scene' || !trigger.triggerPoint) {
-        continue
-      }
+    let matchedGpsTrigger = null
+    let matchedGpsDistance = Number.POSITIVE_INFINITY
+    let matchedSceneTrigger = null
+    let matchedSceneDistance = Number.POSITIVE_INFINITY
 
+    for (const trigger of this.triggerRoutes) {
       if (trigger.once && this.firedTriggers.has(trigger.id)) {
         continue
       }
 
-      this.tempTarget.set(trigger.triggerPoint.x, trigger.triggerPoint.y, trigger.triggerPoint.z)
-      const distance = this.getHorizontalDistance(this.tempCam, this.tempTarget)
+      const routeMode = this.getRoutePositionMode(trigger)
+      if (routeMode === 'scene' && !hasSceneCamera) {
+        continue
+      }
+
+      if (routeMode === 'gps' && (!this.gpsReady || !this.hasGpsTrigger(trigger))) {
+        continue
+      }
+
+      const distance = this.getDistanceToTrigger(trigger, hasSceneCamera ? this.tempCam : null)
+      if (distance == null) {
+        continue
+      }
 
       if (distance > this.getTriggerEnterRadius(trigger)) {
         continue
       }
 
+      if (routeMode === 'gps') {
+        if (distance < matchedGpsDistance) {
+          matchedGpsTrigger = trigger
+          matchedGpsDistance = distance
+        }
+      } else if (distance < matchedSceneDistance) {
+        matchedSceneTrigger = trigger
+        matchedSceneDistance = distance
+      }
+    }
+
+    const matchedTrigger = matchedGpsTrigger || matchedSceneTrigger
+    if (matchedTrigger) {
       this.lastTriggerAt = now
-      this.activatePresetRoute(trigger)
+      const matchedDistance = matchedGpsTrigger ? matchedGpsDistance : matchedSceneDistance
+      this.lastDiagnostic = `match ${matchedTrigger.id} dist=${matchedDistance.toFixed(2)} mode=${this.getRoutePositionMode(matchedTrigger)}`
+      this.activatePresetRoute(matchedTrigger)
       return
     }
 
+    this.lastDiagnostic = `no-match nearest=${this.nearestTriggerId || '-'} armed=${this.triggerArmed ? 'yes' : 'no'}`
     this.updateDebugPanel()
   },
   renderRoute() {
