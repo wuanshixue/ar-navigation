@@ -1,3 +1,4 @@
+# AR 导航计划 - 阶段 1
 1. 定义触发点与预设路线
 - 新增一个触发配置表，例如 triggerRoutes。
 - 每条配置包含：
@@ -23,7 +24,7 @@
 - 组件内通过 import 或读取 JSON 的方式加载配置，避免后续每次调路线都改组件逻辑。
 - 即使 navigationActive 为 false，也要持续检测用户位置。
 - 读取 camera 世界坐标，与每个 trigger 点计算水平距离。
- - 如果距离小于 enterRadius 且满足冷却条件，就触发路线加载；离开 exitRadius 后再允许重复触发。
+- 如果距离小于 enterRadius 且满足冷却条件，就触发路线加载；离开 exitRadius 后再允许重复触发。
 4. 触发后加载预设路线
 - 调用新方法 activatePresetRoute(trigger)：
   - 先清空当前路线实体和点位（复用你已有清空逻辑）
