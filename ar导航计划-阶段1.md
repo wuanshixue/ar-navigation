@@ -11,10 +11,18 @@
 - firedTriggers：已触发集合，防止重复
 - triggerCooldownMs 和 lastTriggerAt：防抖，避免边界抖动反复触发
 - triggerArmed：是否允许再次触发
-3. 在 tick 里做触发检测
+3. 把配置抽离成 JSON，并在 tick 里做触发检测
+- 新增独立配置文件，如 `src/trigger-routes.json`，把 triggerRoutes 从组件源码中拆出去。
+- 每条配置继续保留：
+  - 触发点坐标 x y z（或后续换成 GPS）
+  - enterRadius / exitRadius
+  - 对应预设路线 points（至少2个点）
+  - 是否自动开始导航 autoStart
+  - 一次性触发 once
+- 组件内通过 import 或读取 JSON 的方式加载配置，避免后续每次调路线都改组件逻辑。
 - 即使 navigationActive 为 false，也要持续检测用户位置。
 - 读取 camera 世界坐标，与每个 trigger 点计算水平距离。
- - 如果距离小于 triggerRadius 且满足冷却条件，就触发路线加载。
+ - 如果距离小于 enterRadius 且满足冷却条件，就触发路线加载；离开 exitRadius 后再允许重复触发。
 4. 触发后加载预设路线
 - 调用新方法 activatePresetRoute(trigger)：
   - 先清空当前路线实体和点位（复用你已有清空逻辑）

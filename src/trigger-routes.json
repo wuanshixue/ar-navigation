@@ -1,0 +1,16 @@
+[
+  {
+    "id": "demo-route",
+    "triggerPoint": {"x": 0, "y": 0, "z": -2.2},
+    "enterRadius": 2.0,
+    "exitRadius": 3.3,
+    "autoStart": true,
+    "once": true,
+    "points": [
+      {"x": 0, "y": 0.05, "z": -2.2},
+      {"x": -0.8, "y": 0.05, "z": -9.6},
+      {"x": 3.7, "y": 0.05, "z": -11.1},
+      {"x": 10.1, "y": 0.05, "z": -13.0}
+    ]
+  }
+]

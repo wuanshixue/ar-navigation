@@ -1,4 +1,5 @@
 // Minimal navigation component: tap to place route points, then follow the path.
+import triggerRoutes from './trigger-routes.json'
 
 export const tapPlaceComponent = {
   schema: {
@@ -17,8 +18,16 @@ export const tapPlaceComponent = {
     this.routePoints = []
     this.markerEntities = []
     this.routeEntities = []
+    this.triggerEntities = []
     this.navigationActive = false
     this.currentTargetIndex = 1
+    this.triggerRoutes = triggerRoutes
+    this.activeTriggerId = null
+    this.triggerLockId = null
+    this.firedTriggers = new Set()
+    this.triggerCooldownMs = 1500
+    this.lastTriggerAt = 0
+    this.triggerArmed = true
     this.tempCam = new AFRAME.THREE.Vector3()
     this.tempTarget = new AFRAME.THREE.Vector3()
 
@@ -34,6 +43,7 @@ export const tapPlaceComponent = {
     this.clearButton.addEventListener('click', this.onClearRoute)
     this.recenterButton.addEventListener('click', this.onRecenter)
 
+    this.renderTriggerMarkers()
     this.updateStatus('点击地面设置起点和终点')
   },
   remove() {
@@ -42,6 +52,7 @@ export const tapPlaceComponent = {
     this.undoButton.removeEventListener('click', this.onUndoLastPoint)
     this.clearButton.removeEventListener('click', this.onClearRoute)
     this.recenterButton.removeEventListener('click', this.onRecenter)
+    this.triggerEntities.forEach(entity => entity.remove())
   },
   onGroundClick(event) {
     if (!event.detail || !event.detail.intersection || !event.detail.intersection.point) {
@@ -58,6 +69,9 @@ export const tapPlaceComponent = {
     this.routePoints.push(point)
     this.addMarker(point)
     this.renderRoute()
+    this.activeTriggerId = null
+    this.triggerLockId = null
+    this.triggerArmed = true
     this.navigationActive = false
     this.currentTargetIndex = 1
 
@@ -113,13 +127,11 @@ export const tapPlaceComponent = {
   },
   onClearRoute() {
     this.navigationActive = false
+    this.activeTriggerId = null
+    this.triggerLockId = null
+    this.triggerArmed = true
     this.currentTargetIndex = 1
-    this.routePoints = []
-
-    this.markerEntities.forEach(entity => entity.remove())
-    this.routeEntities.forEach(entity => entity.remove())
-    this.markerEntities = []
-    this.routeEntities = []
+    this.clearRouteEntities()
 
     if (this.prompt) {
       this.prompt.textContent = '点击地面设置起点和终点'
@@ -144,6 +156,195 @@ export const tapPlaceComponent = {
     this.el.sceneEl.appendChild(marker)
     this.markerEntities.push(marker)
     this.updateMarkerColors()
+  },
+  renderTriggerMarkers() {
+    this.triggerEntities.forEach(entity => entity.remove())
+    this.triggerEntities = []
+
+    this.triggerRoutes.forEach((trigger) => {
+      if (trigger.once && this.firedTriggers.has(trigger.id)) {
+        return
+      }
+
+      const marker = document.createElement('a-entity')
+      marker.setAttribute('position', `${trigger.triggerPoint.x} ${trigger.triggerPoint.y} ${trigger.triggerPoint.z}`)
+
+      const beacon = document.createElement('a-cylinder')
+      beacon.setAttribute('position', '0 1.15 0')
+      beacon.setAttribute('radius', 0.08)
+      beacon.setAttribute('height', 2.3)
+      beacon.setAttribute('material', 'color: #4cc9f0; opacity: 0.22; emissive: #4cc9f0; emissiveIntensity: 0.9')
+
+      const baseRing = document.createElement('a-ring')
+      baseRing.setAttribute('position', '0 0.03 0')
+      baseRing.setAttribute('rotation', '-90 0 0')
+      baseRing.setAttribute('radius-inner', Math.max(0.35, this.getTriggerEnterRadius(trigger) * 0.55))
+      baseRing.setAttribute('radius-outer', Math.max(0.52, this.getTriggerEnterRadius(trigger) * 0.78))
+      baseRing.setAttribute('material', 'color: #4cc9f0; opacity: 0.9; emissive: #155e75; emissiveIntensity: 0.45')
+
+      const pillar = document.createElement('a-cylinder')
+      pillar.setAttribute('position', '0 0.48 0')
+      pillar.setAttribute('radius', 0.05)
+      pillar.setAttribute('height', 0.96)
+      pillar.setAttribute('material', 'color: #eaf7ff; metalness: 0.1; roughness: 0.55')
+
+      const banner = document.createElement('a-plane')
+      banner.setAttribute('position', '0 1.46 0')
+      banner.setAttribute('width', 1.15)
+      banner.setAttribute('height', 0.36)
+      banner.setAttribute('material', 'color: #0ea5e9; side: double; opacity: 0.95; emissive: #082f49; emissiveIntensity: 0.35')
+      banner.setAttribute('rotation', '0 -12 0')
+
+      marker.appendChild(beacon)
+      marker.appendChild(baseRing)
+      marker.appendChild(pillar)
+      marker.appendChild(banner)
+      this.el.sceneEl.appendChild(marker)
+      this.triggerEntities.push(marker)
+    })
+  },
+  addStartFlag(point) {
+    const flag = document.createElement('a-entity')
+    flag.setAttribute('position', `${point.x} ${point.y} ${point.z}`)
+
+    const beacon = document.createElement('a-cylinder')
+    beacon.setAttribute('position', '0 1.4 0')
+    beacon.setAttribute('radius', 0.12)
+    beacon.setAttribute('height', 2.8)
+    beacon.setAttribute('material', 'color: #ffd166; opacity: 0.26; emissive: #ffd166; emissiveIntensity: 0.8')
+
+    const baseRing = document.createElement('a-ring')
+    baseRing.setAttribute('position', '0 0.03 0')
+    baseRing.setAttribute('rotation', '-90 0 0')
+    baseRing.setAttribute('radius-inner', 0.55)
+    baseRing.setAttribute('radius-outer', 0.88)
+    baseRing.setAttribute('material', 'color: #ffd166; opacity: 0.95; emissive: #8f6c1d; emissiveIntensity: 0.5')
+
+    const pole = document.createElement('a-cylinder')
+    pole.setAttribute('position', '0 1 0')
+    pole.setAttribute('radius', 0.04)
+    pole.setAttribute('height', 2)
+    pole.setAttribute('material', 'color: #f2f2f2; metalness: 0.15; roughness: 0.6')
+
+    const banner = document.createElement('a-plane')
+    banner.setAttribute('position', '0.5 1.46 0')
+    banner.setAttribute('width', 1)
+    banner.setAttribute('height', 0.56)
+    banner.setAttribute('material', 'color: #ff5a36; side: double; emissive: #7a2212; emissiveIntensity: 0.28')
+    banner.setAttribute('rotation', '0 -18 0')
+
+    flag.appendChild(beacon)
+    flag.appendChild(baseRing)
+    flag.appendChild(pole)
+    flag.appendChild(banner)
+    this.el.sceneEl.appendChild(flag)
+    this.routeEntities.push(flag)
+  },
+  clearRouteEntities() {
+    this.routePoints = []
+    this.markerEntities.forEach(entity => entity.remove())
+    this.routeEntities.forEach(entity => entity.remove())
+    this.markerEntities = []
+    this.routeEntities = []
+  },
+  activatePresetRoute(trigger) {
+    this.navigationActive = false
+    this.currentTargetIndex = 1
+    this.activeTriggerId = trigger.id
+    this.triggerLockId = trigger.id
+    this.triggerArmed = false
+    this.clearRouteEntities()
+
+    this.routePoints = trigger.points.map(point => ({...point}))
+    this.routePoints.forEach(point => this.addMarker(point))
+    this.renderRoute()
+    if (this.routePoints[0]) {
+      this.addStartFlag(this.routePoints[0])
+    }
+
+    if (trigger.once) {
+      this.firedTriggers.add(trigger.id)
+      this.renderTriggerMarkers()
+    }
+
+    if (trigger.autoStart && this.routePoints.length >= 2) {
+      this.navigationActive = true
+      this.updateMarkerColors()
+      this.updateStatus(`已触发预设路线，前往第 ${this.currentTargetIndex + 1}/${this.routePoints.length} 个点`)
+    } else {
+      this.updateStatus(`已加载预设路线，共 ${this.routePoints.length} 个点`)
+    }
+
+    if (this.prompt) {
+      const startPoint = this.routePoints[0]
+      this.prompt.textContent = `已加载预设路线: ${trigger.id}，起点约在 x=${startPoint.x.toFixed(1)} z=${startPoint.z.toFixed(1)}`
+    }
+  },
+  getTriggerEnterRadius(trigger) {
+    return trigger.enterRadius ?? trigger.triggerRadius ?? 1.5
+  },
+  getTriggerExitRadius(trigger) {
+    const enterRadius = this.getTriggerEnterRadius(trigger)
+    return trigger.exitRadius ?? Math.max(enterRadius + 0.7, enterRadius * 1.35)
+  },
+  findTriggerById(triggerId) {
+    return this.triggerRoutes.find(trigger => trigger.id === triggerId) || null
+  },
+  updateTriggerArming() {
+    if (!this.camera || !this.camera.object3D || this.triggerArmed || !this.triggerLockId) {
+      return
+    }
+
+    const lockedTrigger = this.findTriggerById(this.triggerLockId)
+    if (!lockedTrigger) {
+      this.triggerArmed = true
+      this.triggerLockId = null
+      return
+    }
+
+    this.camera.object3D.getWorldPosition(this.tempCam)
+    this.tempTarget.set(lockedTrigger.triggerPoint.x, lockedTrigger.triggerPoint.y, lockedTrigger.triggerPoint.z)
+    const distance = this.getHorizontalDistance(this.tempCam, this.tempTarget)
+
+    if (distance >= this.getTriggerExitRadius(lockedTrigger)) {
+      this.triggerArmed = true
+      this.triggerLockId = null
+    }
+  },
+  checkTriggerRoutes() {
+    if (!this.camera || !this.camera.object3D) {
+      return
+    }
+
+    this.updateTriggerArming()
+
+    if (!this.triggerArmed) {
+      return
+    }
+
+    const now = Date.now()
+    if (now - this.lastTriggerAt < this.triggerCooldownMs) {
+      return
+    }
+
+    this.camera.object3D.getWorldPosition(this.tempCam)
+
+    for (const trigger of this.triggerRoutes) {
+      if (trigger.once && this.firedTriggers.has(trigger.id)) {
+        continue
+      }
+
+      this.tempTarget.set(trigger.triggerPoint.x, trigger.triggerPoint.y, trigger.triggerPoint.z)
+      const distance = this.getHorizontalDistance(this.tempCam, this.tempTarget)
+
+      if (distance > this.getTriggerEnterRadius(trigger)) {
+        continue
+      }
+
+      this.lastTriggerAt = now
+      this.activatePresetRoute(trigger)
+      return
+    }
   },
   renderRoute() {
     this.routeEntities.forEach(entity => entity.remove())
@@ -245,6 +446,8 @@ export const tapPlaceComponent = {
     })
   },
   tick() {
+    this.checkTriggerRoutes()
+
     if (!this.navigationActive || this.routePoints.length < 2 || !this.camera || !this.camera.object3D) {
       return
     }
@@ -275,19 +478,18 @@ export const tapPlaceComponent = {
       return
     }
 
-    const remaining = this.getRemainingDistance(distToTarget)
+    const remaining = this.getDistanceToDestination()
     this.updateStatus(`导航中：下一点 ${distToTarget.toFixed(1)}cm，剩余 ${remaining.toFixed(1)}cm`)
   },
-  getRemainingDistance(distToTarget) {
-    let remaining = distToTarget
-
-    for (let i = this.currentTargetIndex; i < this.routePoints.length - 1; i += 1) {
-      const from = this.routePoints[i]
-      const to = this.routePoints[i + 1]
-      remaining += this.getHorizontalDistance(from, to)
+  getDistanceToDestination() {
+    if (!this.camera || !this.camera.object3D || this.routePoints.length === 0) {
+      return 0
     }
 
-    return remaining
+    const destination = this.routePoints[this.routePoints.length - 1]
+    this.camera.object3D.getWorldPosition(this.tempCam)
+    this.tempTarget.set(destination.x, destination.y, destination.z)
+    return this.getHorizontalDistance(this.tempCam, this.tempTarget)
   },
   getHorizontalDistance(from, to) {
     const dx = to.x - from.x
