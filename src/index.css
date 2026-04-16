@@ -25,6 +25,21 @@
   pointer-events: none;
 }
 
+.debug-panel {
+  position: absolute;
+  top: 13vh;
+  left: 50%;
+  transform: translate(-50%, 0);
+  width: min(92vw, 420px);
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(5, 15, 24, 0.74);
+  backdrop-filter: blur(8px);
+  font-size: 0.88em;
+  line-height: 1.45;
+  text-align: left;
+}
+
 .controls {
   position: absolute;
   left: 50%;

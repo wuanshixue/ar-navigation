@@ -2,7 +2,8 @@
 - 新增一个触发配置表，例如 triggerRoutes。
 - 每条配置包含：
   - 触发点坐标 x y z（或后续换成 GPS）
-  - 触发半径 triggerRadius
+  - 进入半径 enterRadius
+  - 退出半径 exitRadius
   - 对应预设路线 points（至少2个点）
   - 是否自动开始导航 autoStart
   - 一次性触发 once
@@ -40,3 +41,14 @@
 7. 两种定位模式
 - 场景坐标定位（推荐先做）：用当前 camera 的世界坐标和触发点比距离，改动最小。
 - GPS 地理围栏（后续）：把经纬度映射到 AR 坐标或直接做地理触发，再加载同一套预设路线逻辑。
+8. 多路线与调试验证
+- 在 `trigger-routes.json` 中至少配置 3 条路线，覆盖：
+  - `once: true`
+  - `once: false`
+  - `autoStart: true`
+  - `autoStart: false`
+- 在页面上增加轻量调试显示，至少展示：
+  - 当前最近 trigger
+  - 当前是否 armed
+  - 当前活动路线或已触发路线
+- 用它验证状态机在多路线场景下是否稳定，再进入 GPS 或地图服务接入。

@@ -10,6 +10,9 @@ export const tapPlaceComponent = {
     this.camera = document.getElementById('camera')
     this.prompt = document.getElementById('promptText')
     this.statusText = document.getElementById('statusText')
+    this.debugTriggerText = document.getElementById('debugTriggerText')
+    this.debugArmedText = document.getElementById('debugArmedText')
+    this.debugRouteText = document.getElementById('debugRouteText')
     this.startButton = document.getElementById('startNavBtn')
     this.undoButton = document.getElementById('undoPointBtn')
     this.clearButton = document.getElementById('clearRouteBtn')
@@ -28,6 +31,8 @@ export const tapPlaceComponent = {
     this.triggerCooldownMs = 1500
     this.lastTriggerAt = 0
     this.triggerArmed = true
+    this.nearestTriggerId = null
+    this.nearestTriggerDistance = null
     this.tempCam = new AFRAME.THREE.Vector3()
     this.tempTarget = new AFRAME.THREE.Vector3()
 
@@ -44,6 +49,7 @@ export const tapPlaceComponent = {
     this.recenterButton.addEventListener('click', this.onRecenter)
 
     this.renderTriggerMarkers()
+    this.updateDebugPanel()
     this.updateStatus('点击地面设置起点和终点')
   },
   remove() {
@@ -72,8 +78,11 @@ export const tapPlaceComponent = {
     this.activeTriggerId = null
     this.triggerLockId = null
     this.triggerArmed = true
+    this.nearestTriggerId = null
+    this.nearestTriggerDistance = null
     this.navigationActive = false
     this.currentTargetIndex = 1
+    this.updateDebugPanel()
 
     if (this.prompt) {
       this.prompt.textContent = `已添加导航点: ${this.routePoints.length}（至少2个）`
@@ -130,12 +139,15 @@ export const tapPlaceComponent = {
     this.activeTriggerId = null
     this.triggerLockId = null
     this.triggerArmed = true
+    this.nearestTriggerId = null
+    this.nearestTriggerDistance = null
     this.currentTargetIndex = 1
     this.clearRouteEntities()
 
     if (this.prompt) {
       this.prompt.textContent = '点击地面设置起点和终点'
     }
+    this.updateDebugPanel()
     this.updateStatus('路线已清空')
   },
   onRecenter() {
@@ -279,6 +291,7 @@ export const tapPlaceComponent = {
       const startPoint = this.routePoints[0]
       this.prompt.textContent = `已加载预设路线: ${trigger.id}，起点约在 x=${startPoint.x.toFixed(1)} z=${startPoint.z.toFixed(1)}`
     }
+    this.updateDebugPanel()
   },
   getTriggerEnterRadius(trigger) {
     return trigger.enterRadius ?? trigger.triggerRadius ?? 1.5
@@ -309,6 +322,47 @@ export const tapPlaceComponent = {
     if (distance >= this.getTriggerExitRadius(lockedTrigger)) {
       this.triggerArmed = true
       this.triggerLockId = null
+      this.updateDebugPanel()
+    }
+  },
+  updateNearestTrigger(cameraPosition) {
+    let nearestTrigger = null
+    let nearestDistance = Number.POSITIVE_INFINITY
+
+    this.triggerRoutes.forEach((trigger) => {
+      if (trigger.once && this.firedTriggers.has(trigger.id)) {
+        return
+      }
+
+      this.tempTarget.set(trigger.triggerPoint.x, trigger.triggerPoint.y, trigger.triggerPoint.z)
+      const distance = this.getHorizontalDistance(cameraPosition, this.tempTarget)
+
+      if (distance < nearestDistance) {
+        nearestTrigger = trigger
+        nearestDistance = distance
+      }
+    })
+
+    this.nearestTriggerId = nearestTrigger ? nearestTrigger.id : null
+    this.nearestTriggerDistance = nearestTrigger ? nearestDistance : null
+  },
+  updateDebugPanel() {
+    if (this.debugTriggerText) {
+      const nearestLabel = this.nearestTriggerId
+        ? `${this.nearestTriggerId} (${this.nearestTriggerDistance.toFixed(2)}m)`
+        : '-'
+      this.debugTriggerText.textContent = `Trigger: ${nearestLabel}`
+    }
+
+    if (this.debugArmedText) {
+      const lockLabel = this.triggerLockId || '-'
+      this.debugArmedText.textContent = `Armed: ${this.triggerArmed ? 'yes' : 'no'} | Lock: ${lockLabel}`
+    }
+
+    if (this.debugRouteText) {
+      const activeRoute = this.activeTriggerId || 'manual'
+      const firedSummary = this.firedTriggers.size > 0 ? [...this.firedTriggers].join(', ') : '-'
+      this.debugRouteText.textContent = `Route: ${activeRoute} | Fired: ${firedSummary}`
     }
   },
   checkTriggerRoutes() {
@@ -316,9 +370,12 @@ export const tapPlaceComponent = {
       return
     }
 
+    this.camera.object3D.getWorldPosition(this.tempCam)
+    this.updateNearestTrigger(this.tempCam)
     this.updateTriggerArming()
 
     if (!this.triggerArmed) {
+      this.updateDebugPanel()
       return
     }
 
@@ -326,8 +383,6 @@ export const tapPlaceComponent = {
     if (now - this.lastTriggerAt < this.triggerCooldownMs) {
       return
     }
-
-    this.camera.object3D.getWorldPosition(this.tempCam)
 
     for (const trigger of this.triggerRoutes) {
       if (trigger.once && this.firedTriggers.has(trigger.id)) {
@@ -345,6 +400,8 @@ export const tapPlaceComponent = {
       this.activatePresetRoute(trigger)
       return
     }
+
+    this.updateDebugPanel()
   },
   renderRoute() {
     this.routeEntities.forEach(entity => entity.remove())
