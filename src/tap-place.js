@@ -16,6 +16,7 @@ export const tapPlaceComponent = {
     this.debugRouteText = document.getElementById('debugRouteText')
     this.debugGpsText = document.getElementById('debugGpsText')
     this.debugDiagText = document.getElementById('debugDiagText')
+    this.calibrateButton = document.getElementById('calibrateBtn')
     this.startButton = document.getElementById('startNavBtn')
     this.undoButton = document.getElementById('undoPointBtn')
     this.clearButton = document.getElementById('clearRouteBtn')
@@ -49,18 +50,21 @@ export const tapPlaceComponent = {
     this.gpsSupported = typeof navigator !== 'undefined' && 'geolocation' in navigator
     this.gpsWatchId = null
     this.gpsAnchor = null
+    this.calibrationAnchor = null
     this.lastDiagnostic = 'init'
     this.tempCam = new AFRAME.THREE.Vector3()
     this.tempTarget = new AFRAME.THREE.Vector3()
     this.tempForward = new AFRAME.THREE.Vector3()
 
     this.onGroundClick = this.onGroundClick.bind(this)
+    this.onCalibrate = this.onCalibrate.bind(this)
     this.onStartNavigation = this.onStartNavigation.bind(this)
     this.onUndoLastPoint = this.onUndoLastPoint.bind(this)
     this.onClearRoute = this.onClearRoute.bind(this)
     this.onRecenter = this.onRecenter.bind(this)
 
     this.ground.addEventListener('click', this.onGroundClick)
+    this.calibrateButton.addEventListener('click', this.onCalibrate)
     this.startButton.addEventListener('click', this.onStartNavigation)
     this.undoButton.addEventListener('click', this.onUndoLastPoint)
     this.clearButton.addEventListener('click', this.onClearRoute)
@@ -73,12 +77,54 @@ export const tapPlaceComponent = {
   },
   remove() {
     this.ground.removeEventListener('click', this.onGroundClick)
+    this.calibrateButton.removeEventListener('click', this.onCalibrate)
     this.startButton.removeEventListener('click', this.onStartNavigation)
     this.undoButton.removeEventListener('click', this.onUndoLastPoint)
     this.clearButton.removeEventListener('click', this.onClearRoute)
     this.recenterButton.removeEventListener('click', this.onRecenter)
     this.triggerEntities.forEach(entity => entity.remove())
     this.stopGeolocationWatch()
+  },
+  onCalibrate() {
+    if (!this.gpsReady || !this.currentGpsPosition) {
+      this.updateStatus('定位尚未就绪，暂时无法校准')
+      this.lastDiagnostic = 'calibrate-failed gps-not-ready'
+      this.updateDebugPanel()
+      return
+    }
+
+    if (!this.camera || !this.camera.object3D) {
+      this.updateStatus('相机未就绪，暂时无法校准')
+      this.lastDiagnostic = 'calibrate-failed camera-not-ready'
+      this.updateDebugPanel()
+      return
+    }
+
+    this.camera.object3D.getWorldPosition(this.tempCam)
+    this.camera.object3D.getWorldDirection(this.tempForward)
+
+    const horizontalLength = Math.sqrt(
+      this.tempForward.x * this.tempForward.x + this.tempForward.z * this.tempForward.z
+    )
+
+    const sceneForwardAngle = horizontalLength > 0.001
+      ? Math.atan2(this.tempForward.z / horizontalLength, this.tempForward.x / horizontalLength)
+      : 0
+
+    this.calibrationAnchor = {
+      gps: {...this.currentGpsPosition},
+      scene: {
+        x: this.tempCam.x,
+        y: 0.05,
+        z: this.tempCam.z,
+      },
+      sceneForwardAngle,
+      updatedAt: Date.now(),
+    }
+
+    this.lastDiagnostic = `calibrated ${this.currentGpsPosition.lat.toFixed(6)},${this.currentGpsPosition.lng.toFixed(6)}`
+    this.updateDebugPanel()
+    this.updateStatus('定位校准成功，后续 GPS 路线将优先使用当前锚点')
   },
   onGroundClick(event) {
     if (!event.detail || !event.detail.intersection || !event.detail.intersection.point) {
@@ -194,7 +240,9 @@ export const tapPlaceComponent = {
     this.triggerEntities = []
 
     this.triggerRoutes.forEach((trigger) => {
-      if (this.getRoutePositionMode(trigger) !== 'scene' || !trigger.triggerPoint) {
+      const routeMode = this.getRoutePositionMode(trigger)
+      const shouldRenderSceneMarker = routeMode === 'scene' || this.shouldUseSceneFallback(trigger)
+      if (!shouldRenderSceneMarker || !trigger.triggerPoint) {
         return
       }
 
@@ -352,7 +400,16 @@ export const tapPlaceComponent = {
   getRoutePositionMode(route) {
     return route.positionMode ?? 'scene'
   },
+  shouldUseSceneFallback(route) {
+    return this.getRoutePositionMode(route) === 'gps'
+      && (!this.gpsReady || !this.hasGpsTrigger(route))
+      && !!route.triggerPoint
+  },
   getRouteSceneAnchor(trigger) {
+    if (this.getRoutePositionMode(trigger) === 'gps' && this.calibrationAnchor?.scene) {
+      return {...this.calibrationAnchor.scene}
+    }
+
     if (this.getRoutePositionMode(trigger) === 'gps' && this.camera && this.camera.object3D) {
       this.camera.object3D.getWorldPosition(this.tempCam)
       this.camera.object3D.getWorldDirection(this.tempForward)
@@ -408,12 +465,20 @@ export const tapPlaceComponent = {
     }
   },
   getGpsSceneTransformAngle(trigger) {
-    if (!this.camera || !this.camera.object3D || !this.hasGpsPoints(trigger) || trigger.pointsGps.length < 2) {
+    if (!this.hasGpsPoints(trigger) || trigger.pointsGps.length < 2) {
       return 0
     }
 
     const firstOffset = this.getMetersOffsetBetweenGpsPoints(trigger.pointsGps[0], trigger.pointsGps[1])
     const gpsAngle = Math.atan2(-firstOffset.northMeters, firstOffset.eastMeters)
+
+    if (this.calibrationAnchor) {
+      return this.calibrationAnchor.sceneForwardAngle - gpsAngle
+    }
+
+    if (!this.camera || !this.camera.object3D) {
+      return 0
+    }
 
     this.camera.object3D.getWorldDirection(this.tempForward)
     const horizontalLength = Math.sqrt(
@@ -427,7 +492,6 @@ export const tapPlaceComponent = {
     const forwardX = this.tempForward.x / horizontalLength
     const forwardZ = this.tempForward.z / horizontalLength
     const sceneAngle = Math.atan2(forwardZ, forwardX)
-
     return sceneAngle - gpsAngle
   },
   convertGpsPointToScenePoint(originGps, targetGps, anchorPoint, transformAngle = 0) {
@@ -442,13 +506,14 @@ export const tapPlaceComponent = {
   getRouteScenePoints(trigger) {
     if (this.getRoutePositionMode(trigger) === 'gps' && this.hasGpsPoints(trigger)) {
       const anchorPoint = this.getRouteSceneAnchor(trigger)
-      const anchorGps = trigger.triggerGps || trigger.pointsGps[0]
+      const anchorGps = this.calibrationAnchor?.gps || trigger.triggerGps || trigger.pointsGps[0]
       const transformAngle = this.getGpsSceneTransformAngle(trigger)
       this.gpsAnchor = {
         routeId: trigger.id,
         gps: {...anchorGps},
         scene: {...anchorPoint},
         transformAngle,
+        calibrated: Boolean(this.calibrationAnchor),
       }
 
       return trigger.pointsGps.map(point => (
@@ -529,11 +594,13 @@ export const tapPlaceComponent = {
   },
   getDistanceToTrigger(trigger, cameraPosition) {
     if (this.getRoutePositionMode(trigger) === 'gps') {
-      if (!this.gpsReady || !this.currentGpsPosition || !this.hasGpsTrigger(trigger)) {
-        return null
+      if (this.gpsReady && this.currentGpsPosition && this.hasGpsTrigger(trigger)) {
+        return this.getGpsDistanceMeters(this.currentGpsPosition, trigger.triggerGps)
       }
 
-      return this.getGpsDistanceMeters(this.currentGpsPosition, trigger.triggerGps)
+      if (!this.shouldUseSceneFallback(trigger)) {
+        return null
+      }
     }
 
     if (!trigger.triggerPoint || !cameraPosition) {
@@ -565,7 +632,7 @@ export const tapPlaceComponent = {
     const routeMode = this.getRoutePositionMode(lockedTrigger)
     let distance = null
 
-    if (routeMode === 'gps') {
+    if (routeMode === 'gps' && this.gpsReady && this.currentGpsPosition && this.hasGpsTrigger(lockedTrigger)) {
       distance = this.getDistanceToTrigger(lockedTrigger, null)
     } else {
       if (!this.camera || !this.camera.object3D) {
@@ -613,7 +680,8 @@ export const tapPlaceComponent = {
     if (this.debugModeText) {
       const activeRoute = this.activeTriggerId ? this.findTriggerById(this.activeTriggerId) : null
       const mode = activeRoute ? this.getRoutePositionMode(activeRoute) : 'scene'
-      this.debugModeText.textContent = `Mode: ${mode} | GPS ready: ${this.gpsReady ? 'yes' : 'no'}`
+      const calibrated = this.calibrationAnchor ? 'yes' : 'no'
+      this.debugModeText.textContent = `Mode: ${mode} | GPS ready: ${this.gpsReady ? 'yes' : 'no'} | Calibrated: ${calibrated}`
     }
 
     if (this.debugTriggerText) {
@@ -632,7 +700,7 @@ export const tapPlaceComponent = {
       const activeRoute = this.activeTriggerId || 'manual'
       const firedSummary = this.firedTriggers.size > 0 ? [...this.firedTriggers].join(', ') : '-'
       const anchorSummary = this.gpsAnchor
-        ? ` | Anchor: ${this.gpsAnchor.routeId} @ ${this.gpsAnchor.scene.x.toFixed(1)},${this.gpsAnchor.scene.z.toFixed(1)}`
+        ? ` | Anchor: ${this.gpsAnchor.routeId} @ ${this.gpsAnchor.scene.x.toFixed(1)},${this.gpsAnchor.scene.z.toFixed(1)}${this.gpsAnchor.calibrated ? ' calibrated' : ''}`
         : ''
       this.debugRouteText.textContent = `Route: ${activeRoute} | Fired: ${firedSummary}${anchorSummary}`
     }
@@ -686,7 +754,7 @@ export const tapPlaceComponent = {
         continue
       }
 
-      if (routeMode === 'gps' && (!this.gpsReady || !this.hasGpsTrigger(trigger))) {
+      if (routeMode === 'gps' && !this.gpsReady && !this.shouldUseSceneFallback(trigger)) {
         continue
       }
 
