@@ -4,6 +4,7 @@ import triggerRoutes from './trigger-routes.json'
 const CALIBRATION_STORAGE_KEY = 'ar-nav-calibration-anchor'
 const GPS_CALIBRATION_ACCURACY_THRESHOLD = 15
 const GPS_TRIGGER_ACCURACY_THRESHOLD = 25
+const SINGLE_ROUTE_TEST_ID = 'gps-test-route'
 
 export const tapPlaceComponent = {
   schema: {
@@ -23,6 +24,7 @@ export const tapPlaceComponent = {
     this.debugDiagText = document.getElementById('debugDiagText')
     this.calibrateButton = document.getElementById('calibrateBtn')
     this.clearCalibrationButton = document.getElementById('clearCalibrationBtn')
+    this.resetTriggerButton = document.getElementById('resetTriggerBtn')
     this.startButton = document.getElementById('startNavBtn')
     this.undoButton = document.getElementById('undoPointBtn')
     this.clearButton = document.getElementById('clearRouteBtn')
@@ -34,12 +36,14 @@ export const tapPlaceComponent = {
     this.triggerEntities = []
     this.navigationActive = false
     this.currentTargetIndex = 1
-    this.triggerRoutes = triggerRoutes.map(route => ({
-      ...route,
-      positionMode: route.positionMode ?? 'scene',
-      triggerGps: route.triggerGps ?? null,
-      pointsGps: route.pointsGps ?? [],
-    }))
+    this.triggerRoutes = triggerRoutes
+      .map(route => ({
+        ...route,
+        positionMode: route.positionMode ?? 'scene',
+        triggerGps: route.triggerGps ?? null,
+        pointsGps: route.pointsGps ?? [],
+      }))
+      .filter(route => route.id === SINGLE_ROUTE_TEST_ID)
     this.activeTriggerId = null
     this.triggerLockId = null
     this.firedTriggers = new Set()
@@ -65,6 +69,7 @@ export const tapPlaceComponent = {
     this.onGroundClick = this.onGroundClick.bind(this)
     this.onCalibrate = this.onCalibrate.bind(this)
     this.onClearCalibration = this.onClearCalibration.bind(this)
+    this.onResetTrigger = this.onResetTrigger.bind(this)
     this.onStartNavigation = this.onStartNavigation.bind(this)
     this.onUndoLastPoint = this.onUndoLastPoint.bind(this)
     this.onClearRoute = this.onClearRoute.bind(this)
@@ -73,6 +78,7 @@ export const tapPlaceComponent = {
     this.ground.addEventListener('click', this.onGroundClick)
     this.calibrateButton.addEventListener('click', this.onCalibrate)
     this.clearCalibrationButton.addEventListener('click', this.onClearCalibration)
+    this.resetTriggerButton.addEventListener('click', this.onResetTrigger)
     this.startButton.addEventListener('click', this.onStartNavigation)
     this.undoButton.addEventListener('click', this.onUndoLastPoint)
     this.clearButton.addEventListener('click', this.onClearRoute)
@@ -82,12 +88,13 @@ export const tapPlaceComponent = {
     this.renderTriggerMarkers()
     this.startGeolocationWatch()
     this.updateDebugPanel()
-    this.updateStatus('点击地面设置起点和终点')
+    this.updateStatus('单路线重复实测模式：等待 gps-test-route 触发')
   },
   remove() {
     this.ground.removeEventListener('click', this.onGroundClick)
     this.calibrateButton.removeEventListener('click', this.onCalibrate)
     this.clearCalibrationButton.removeEventListener('click', this.onClearCalibration)
+    this.resetTriggerButton.removeEventListener('click', this.onResetTrigger)
     this.startButton.removeEventListener('click', this.onStartNavigation)
     this.undoButton.removeEventListener('click', this.onUndoLastPoint)
     this.clearButton.removeEventListener('click', this.onClearRoute)
@@ -151,6 +158,27 @@ export const tapPlaceComponent = {
     this.lastDiagnostic = 'calibration-cleared'
     this.updateDebugPanel()
     this.updateStatus('已清除校准锚点')
+  },
+  onResetTrigger() {
+    this.navigationActive = false
+    this.activeTriggerId = null
+    this.triggerLockId = null
+    this.triggerArmed = true
+    this.lastTriggerAt = 0
+    this.nearestTriggerId = null
+    this.nearestTriggerDistance = null
+    this.currentTargetIndex = 1
+    this.gpsAnchor = null
+    this.clearRouteEntities()
+    this.renderTriggerMarkers()
+    this.lastDiagnostic = 'trigger-reset'
+
+    if (this.prompt) {
+      this.prompt.textContent = '单路线重复实测模式：等待 gps-test-route 触发'
+    }
+
+    this.updateDebugPanel()
+    this.updateStatus('已重置触发状态，可再次进行 gps-test-route 实测')
   },
   onGroundClick(event) {
     if (!event.detail || !event.detail.intersection || !event.detail.intersection.point) {
@@ -266,9 +294,7 @@ export const tapPlaceComponent = {
     this.triggerEntities = []
 
     this.triggerRoutes.forEach((trigger) => {
-      const routeMode = this.getRoutePositionMode(trigger)
-      const shouldRenderSceneMarker = routeMode === 'scene' || this.shouldUseSceneFallback(trigger)
-      if (!shouldRenderSceneMarker || !trigger.triggerPoint) {
+      if (!this.shouldRenderTriggerMarker(trigger)) {
         return
       }
 
@@ -430,6 +456,18 @@ export const tapPlaceComponent = {
     return this.getRoutePositionMode(route) === 'gps'
       && (!this.gpsReady || !this.hasGpsTrigger(route))
       && !!route.triggerPoint
+  },
+  shouldRenderTriggerMarker(route) {
+    if (!route.triggerPoint) {
+      return false
+    }
+
+    if (route.id === SINGLE_ROUTE_TEST_ID) {
+      return true
+    }
+
+    const routeMode = this.getRoutePositionMode(route)
+    return routeMode === 'scene' || this.shouldUseSceneFallback(route)
   },
   getRouteSceneAnchor(trigger) {
     if (this.getRoutePositionMode(trigger) === 'gps' && this.calibrationAnchor?.scene) {
@@ -784,7 +822,7 @@ export const tapPlaceComponent = {
       const anchorSummary = this.gpsAnchor
         ? ` | Anchor: ${this.gpsAnchor.routeId} @ ${this.gpsAnchor.scene.x.toFixed(1)},${this.gpsAnchor.scene.z.toFixed(1)}${this.gpsAnchor.calibrated ? ' calibrated' : ''}`
         : ''
-      this.debugRouteText.textContent = `Route: ${activeRoute} | Fired: ${firedSummary}${anchorSummary}`
+      this.debugRouteText.textContent = `Route: ${activeRoute} | TestOnly: ${SINGLE_ROUTE_TEST_ID} | Fired: ${firedSummary}${anchorSummary}`
     }
 
     if (this.debugGpsText) {
