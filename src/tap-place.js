@@ -1,6 +1,10 @@
 // Minimal navigation component: tap to place route points, then follow the path.
 import triggerRoutes from './trigger-routes.json'
 
+const CALIBRATION_STORAGE_KEY = 'ar-nav-calibration-anchor'
+const GPS_CALIBRATION_ACCURACY_THRESHOLD = 15
+const GPS_TRIGGER_ACCURACY_THRESHOLD = 25
+
 export const tapPlaceComponent = {
   schema: {
     arrivalThreshold: {default: 0.8},
@@ -15,8 +19,10 @@ export const tapPlaceComponent = {
     this.debugArmedText = document.getElementById('debugArmedText')
     this.debugRouteText = document.getElementById('debugRouteText')
     this.debugGpsText = document.getElementById('debugGpsText')
+    this.debugCalibrationText = document.getElementById('debugCalibrationText')
     this.debugDiagText = document.getElementById('debugDiagText')
     this.calibrateButton = document.getElementById('calibrateBtn')
+    this.clearCalibrationButton = document.getElementById('clearCalibrationBtn')
     this.startButton = document.getElementById('startNavBtn')
     this.undoButton = document.getElementById('undoPointBtn')
     this.clearButton = document.getElementById('clearRouteBtn')
@@ -58,6 +64,7 @@ export const tapPlaceComponent = {
 
     this.onGroundClick = this.onGroundClick.bind(this)
     this.onCalibrate = this.onCalibrate.bind(this)
+    this.onClearCalibration = this.onClearCalibration.bind(this)
     this.onStartNavigation = this.onStartNavigation.bind(this)
     this.onUndoLastPoint = this.onUndoLastPoint.bind(this)
     this.onClearRoute = this.onClearRoute.bind(this)
@@ -65,11 +72,13 @@ export const tapPlaceComponent = {
 
     this.ground.addEventListener('click', this.onGroundClick)
     this.calibrateButton.addEventListener('click', this.onCalibrate)
+    this.clearCalibrationButton.addEventListener('click', this.onClearCalibration)
     this.startButton.addEventListener('click', this.onStartNavigation)
     this.undoButton.addEventListener('click', this.onUndoLastPoint)
     this.clearButton.addEventListener('click', this.onClearRoute)
     this.recenterButton.addEventListener('click', this.onRecenter)
 
+    this.restoreCalibrationAnchor()
     this.renderTriggerMarkers()
     this.startGeolocationWatch()
     this.updateDebugPanel()
@@ -78,6 +87,7 @@ export const tapPlaceComponent = {
   remove() {
     this.ground.removeEventListener('click', this.onGroundClick)
     this.calibrateButton.removeEventListener('click', this.onCalibrate)
+    this.clearCalibrationButton.removeEventListener('click', this.onClearCalibration)
     this.startButton.removeEventListener('click', this.onStartNavigation)
     this.undoButton.removeEventListener('click', this.onUndoLastPoint)
     this.clearButton.removeEventListener('click', this.onClearRoute)
@@ -89,6 +99,13 @@ export const tapPlaceComponent = {
     if (!this.gpsReady || !this.currentGpsPosition) {
       this.updateStatus('定位尚未就绪，暂时无法校准')
       this.lastDiagnostic = 'calibrate-failed gps-not-ready'
+      this.updateDebugPanel()
+      return
+    }
+
+    if (!this.isGpsAccurateEnoughForCalibration()) {
+      this.updateStatus(`当前定位精度 ${this.gpsAccuracy.toFixed(1)}m，超过校准阈值 ${GPS_CALIBRATION_ACCURACY_THRESHOLD}m`)
+      this.lastDiagnostic = `calibrate-failed accuracy=${this.gpsAccuracy.toFixed(1)}`
       this.updateDebugPanel()
       return
     }
@@ -122,9 +139,18 @@ export const tapPlaceComponent = {
       updatedAt: Date.now(),
     }
 
+    this.persistCalibrationAnchor()
     this.lastDiagnostic = `calibrated ${this.currentGpsPosition.lat.toFixed(6)},${this.currentGpsPosition.lng.toFixed(6)}`
     this.updateDebugPanel()
     this.updateStatus('定位校准成功，后续 GPS 路线将优先使用当前锚点')
+  },
+  onClearCalibration() {
+    this.calibrationAnchor = null
+    this.gpsAnchor = null
+    this.clearPersistedCalibrationAnchor()
+    this.lastDiagnostic = 'calibration-cleared'
+    this.updateDebugPanel()
+    this.updateStatus('已清除校准锚点')
   },
   onGroundClick(event) {
     if (!event.detail || !event.detail.intersection || !event.detail.intersection.point) {
@@ -437,6 +463,50 @@ export const tapPlaceComponent = {
       z: basePoint.z,
     }
   },
+  persistCalibrationAnchor() {
+    if (!this.calibrationAnchor || typeof window === 'undefined' || !window.localStorage) {
+      return
+    }
+
+    window.localStorage.setItem(CALIBRATION_STORAGE_KEY, JSON.stringify(this.calibrationAnchor))
+  },
+  clearPersistedCalibrationAnchor() {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return
+    }
+
+    window.localStorage.removeItem(CALIBRATION_STORAGE_KEY)
+  },
+  restoreCalibrationAnchor() {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return
+    }
+
+    const rawAnchor = window.localStorage.getItem(CALIBRATION_STORAGE_KEY)
+    if (!rawAnchor) {
+      return
+    }
+
+    try {
+      const parsedAnchor = JSON.parse(rawAnchor)
+      if (
+        parsedAnchor
+        && parsedAnchor.gps
+        && typeof parsedAnchor.gps.lat === 'number'
+        && typeof parsedAnchor.gps.lng === 'number'
+        && parsedAnchor.scene
+        && typeof parsedAnchor.scene.x === 'number'
+        && typeof parsedAnchor.scene.z === 'number'
+        && typeof parsedAnchor.sceneForwardAngle === 'number'
+      ) {
+        this.calibrationAnchor = parsedAnchor
+        this.lastDiagnostic = `calibration-restored ${parsedAnchor.gps.lat.toFixed(6)},${parsedAnchor.gps.lng.toFixed(6)}`
+      }
+    } catch (error) {
+      this.clearPersistedCalibrationAnchor()
+      this.lastDiagnostic = 'calibration-restore-failed'
+    }
+  },
   hasGpsTrigger(route) {
     return this.getRoutePositionMode(route) === 'gps' && route.triggerGps
       && typeof route.triggerGps.lat === 'number' && typeof route.triggerGps.lng === 'number'
@@ -580,6 +650,12 @@ export const tapPlaceComponent = {
 
     return `${this.currentGpsPosition.lat.toFixed(6)}, ${this.currentGpsPosition.lng.toFixed(6)}`
   },
+  isGpsAccurateEnoughForCalibration() {
+    return this.gpsAccuracy != null && this.gpsAccuracy <= GPS_CALIBRATION_ACCURACY_THRESHOLD
+  },
+  isGpsAccurateEnoughForTrigger() {
+    return this.gpsAccuracy != null && this.gpsAccuracy <= GPS_TRIGGER_ACCURACY_THRESHOLD
+  },
   getGpsDistanceMeters(from, to) {
     const earthRadius = 6371000
     const lat1 = from.lat * (Math.PI / 180)
@@ -594,7 +670,12 @@ export const tapPlaceComponent = {
   },
   getDistanceToTrigger(trigger, cameraPosition) {
     if (this.getRoutePositionMode(trigger) === 'gps') {
-      if (this.gpsReady && this.currentGpsPosition && this.hasGpsTrigger(trigger)) {
+      if (
+        this.gpsReady
+        && this.currentGpsPosition
+        && this.hasGpsTrigger(trigger)
+        && this.isGpsAccurateEnoughForTrigger()
+      ) {
         return this.getGpsDistanceMeters(this.currentGpsPosition, trigger.triggerGps)
       }
 
@@ -681,7 +762,8 @@ export const tapPlaceComponent = {
       const activeRoute = this.activeTriggerId ? this.findTriggerById(this.activeTriggerId) : null
       const mode = activeRoute ? this.getRoutePositionMode(activeRoute) : 'scene'
       const calibrated = this.calibrationAnchor ? 'yes' : 'no'
-      this.debugModeText.textContent = `Mode: ${mode} | GPS ready: ${this.gpsReady ? 'yes' : 'no'} | Calibrated: ${calibrated}`
+      const gpsGate = this.isGpsAccurateEnoughForTrigger() ? 'ok' : 'poor'
+      this.debugModeText.textContent = `Mode: ${mode} | GPS ready: ${this.gpsReady ? 'yes' : 'no'} | GPS gate: ${gpsGate} | Calibrated: ${calibrated}`
     }
 
     if (this.debugTriggerText) {
@@ -709,7 +791,23 @@ export const tapPlaceComponent = {
       const accuracyLabel = this.gpsAccuracy != null ? `${this.gpsAccuracy.toFixed(1)}m` : '-'
       const updatedLabel = this.gpsUpdatedAt ? new Date(this.gpsUpdatedAt).toLocaleTimeString() : '-'
       const errorLabel = this.gpsError ? ` | Error: ${this.gpsError}` : ''
-      this.debugGpsText.textContent = `GPS: ${this.formatGpsPosition()} | Acc: ${accuracyLabel} | Updated: ${updatedLabel}${errorLabel}`
+      const thresholdLabel = ` | Gate(cal/trigger): ${GPS_CALIBRATION_ACCURACY_THRESHOLD}m/${GPS_TRIGGER_ACCURACY_THRESHOLD}m`
+      this.debugGpsText.textContent = `GPS: ${this.formatGpsPosition()} | Acc: ${accuracyLabel} | Updated: ${updatedLabel}${thresholdLabel}${errorLabel}`
+    }
+
+    if (this.debugCalibrationText) {
+      if (!this.calibrationAnchor) {
+        this.debugCalibrationText.textContent = 'Calibration: -'
+      } else {
+        const calibrationTime = this.calibrationAnchor.updatedAt
+          ? new Date(this.calibrationAnchor.updatedAt).toLocaleTimeString()
+          : '-'
+        this.debugCalibrationText.textContent =
+          `Calibration: ${this.calibrationAnchor.gps.lat.toFixed(6)}, ${this.calibrationAnchor.gps.lng.toFixed(6)}`
+          + ` | Scene: ${this.calibrationAnchor.scene.x.toFixed(1)}, ${this.calibrationAnchor.scene.z.toFixed(1)}`
+          + ` | Angle: ${this.calibrationAnchor.sceneForwardAngle.toFixed(2)}`
+          + ` | Saved: ${calibrationTime}`
+      }
     }
 
     if (this.debugDiagText) {
@@ -751,6 +849,11 @@ export const tapPlaceComponent = {
 
       const routeMode = this.getRoutePositionMode(trigger)
       if (routeMode === 'scene' && !hasSceneCamera) {
+        continue
+      }
+
+      if (routeMode === 'gps' && this.gpsReady && !this.isGpsAccurateEnoughForTrigger()) {
+        this.lastDiagnostic = `gps-blocked accuracy=${this.gpsAccuracy.toFixed(1)} trigger-threshold=${GPS_TRIGGER_ACCURACY_THRESHOLD}`
         continue
       }
 
