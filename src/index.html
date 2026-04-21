@@ -38,14 +38,32 @@
 
 <div class="over">
   <span id="promptText">点击地面设置起点和终点</span>
+  <div class="anchor-picker">
+    <label for="startAnchorSelect">室内起点</label>
+    <select id="startAnchorSelect">
+      <option value="">请选择起点锚点</option>
+    </select>
+    <button id="applyStartAnchorBtn">应用起点</button>
+    <select id="destinationSelect">
+      <option value="">请选择目的地</option>
+    </select>
+    <label for="destinationSelect">目的地</label>
+  </div>
   <div id="debugPanel" class="debug-panel">
-    <div id="debugModeText">Mode: -</div>
-    <div id="debugTriggerText">Trigger: -</div>
-    <div id="debugArmedText">Armed: -</div>
-    <div id="debugRouteText">Route: -</div>
-    <div id="debugGpsText">GPS: -</div>
-    <div id="debugCalibrationText">Calibration: -</div>
-    <div id="debugDiagText">Diag: -</div>
+    <div class="debug-panel__header">
+      <span class="debug-panel__title">Debug</span>
+      <button id="toggleDebugPanelBtn" type="button">折叠</button>
+    </div>
+    <div id="debugPanelBody" class="debug-panel__body">
+      <div id="debugModeText">Mode: -</div>
+      <div id="debugStartAnchorText">StartAnchor: -</div>
+      <div id="debugTriggerText">Trigger: -</div>
+      <div id="debugArmedText">Armed: -</div>
+      <div id="debugRouteText">Route: -</div>
+      <div id="debugGpsText">GPS: -</div>
+      <div id="debugCalibrationText">Calibration: -</div>
+      <div id="debugDiagText">Diag: -</div>
+    </div>
   </div>
   <div class="controls">
     <button id="calibrateBtn">校准定位</button>

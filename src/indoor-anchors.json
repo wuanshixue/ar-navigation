@@ -1,0 +1,26 @@
+[
+  {
+    "id": "entrance-a",
+    "name": "入口A",
+    "anchorType": "manual",
+    "floorId": "f1",
+    "scenePoint": {"x": 0, "y": 0.05, "z": -1.4},
+    "forward": {"x": 0, "z": -1}
+  },
+  {
+    "id": "front-desk",
+    "name": "前台",
+    "anchorType": "manual",
+    "floorId": "f1",
+    "scenePoint": {"x": 3.2, "y": 0.05, "z": -4.2},
+    "forward": {"x": 0.2, "z": -1}
+  },
+  {
+    "id": "elevator-lobby",
+    "name": "电梯口",
+    "anchorType": "manual",
+    "floorId": "f1",
+    "scenePoint": {"x": -2.8, "y": 0.05, "z": -5.8},
+    "forward": {"x": -0.1, "z": -1}
+  }
+]

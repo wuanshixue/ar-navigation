@@ -1,7 +1,12 @@
 // Minimal navigation component: tap to place route points, then follow the path.
+import indoorAnchors from './indoor-anchors.json'
+import indoorRoutes from './indoor-routes.json'
 import triggerRoutes from './trigger-routes.json'
 
 const CALIBRATION_STORAGE_KEY = 'ar-nav-calibration-anchor'
+const START_ANCHOR_STORAGE_KEY = 'ar-nav-start-anchor'
+const INDOOR_ROUTE_STORAGE_KEY = 'ar-nav-indoor-route'
+const DEBUG_PANEL_COLLAPSED_KEY = 'ar-nav-debug-panel-collapsed'
 const GPS_CALIBRATION_ACCURACY_THRESHOLD = 15
 const GPS_TRIGGER_ACCURACY_THRESHOLD = 25
 const SINGLE_ROUTE_TEST_ID = 'gps-test-route'
@@ -16,12 +21,18 @@ export const tapPlaceComponent = {
     this.prompt = document.getElementById('promptText')
     this.statusText = document.getElementById('statusText')
     this.debugModeText = document.getElementById('debugModeText')
+    this.debugStartAnchorText = document.getElementById('debugStartAnchorText')
     this.debugTriggerText = document.getElementById('debugTriggerText')
     this.debugArmedText = document.getElementById('debugArmedText')
     this.debugRouteText = document.getElementById('debugRouteText')
     this.debugGpsText = document.getElementById('debugGpsText')
     this.debugCalibrationText = document.getElementById('debugCalibrationText')
     this.debugDiagText = document.getElementById('debugDiagText')
+    this.debugPanel = document.getElementById('debugPanel')
+    this.toggleDebugPanelButton = document.getElementById('toggleDebugPanelBtn')
+    this.startAnchorSelect = document.getElementById('startAnchorSelect')
+    this.destinationSelect = document.getElementById('destinationSelect')
+    this.applyStartAnchorButton = document.getElementById('applyStartAnchorBtn')
     this.calibrateButton = document.getElementById('calibrateBtn')
     this.clearCalibrationButton = document.getElementById('clearCalibrationBtn')
     this.resetTriggerButton = document.getElementById('resetTriggerBtn')
@@ -34,8 +45,21 @@ export const tapPlaceComponent = {
     this.markerEntities = []
     this.routeEntities = []
     this.triggerEntities = []
+    this.anchorEntities = []
     this.navigationActive = false
     this.currentTargetIndex = 1
+    this.indoorAnchors = indoorAnchors.map(anchor => ({
+      ...anchor,
+      anchorType: anchor.anchorType ?? 'manual',
+      floorId: anchor.floorId ?? 'f1',
+    }))
+    this.indoorRoutes = indoorRoutes.map(route => ({
+      ...route,
+      floorId: route.floorId ?? 'f1',
+      autoStart: route.autoStart ?? true,
+    }))
+    this.selectedStartAnchorId = null
+    this.selectedIndoorRouteId = null
     this.triggerRoutes = triggerRoutes
       .map(route => ({
         ...route,
@@ -61,12 +85,16 @@ export const tapPlaceComponent = {
     this.gpsWatchId = null
     this.gpsAnchor = null
     this.calibrationAnchor = null
+    this.debugPanelCollapsed = false
     this.lastDiagnostic = 'init'
     this.tempCam = new AFRAME.THREE.Vector3()
     this.tempTarget = new AFRAME.THREE.Vector3()
     this.tempForward = new AFRAME.THREE.Vector3()
 
     this.onGroundClick = this.onGroundClick.bind(this)
+    this.onApplyStartAnchor = this.onApplyStartAnchor.bind(this)
+    this.onDestinationChange = this.onDestinationChange.bind(this)
+    this.onToggleDebugPanel = this.onToggleDebugPanel.bind(this)
     this.onCalibrate = this.onCalibrate.bind(this)
     this.onClearCalibration = this.onClearCalibration.bind(this)
     this.onResetTrigger = this.onResetTrigger.bind(this)
@@ -76,6 +104,9 @@ export const tapPlaceComponent = {
     this.onRecenter = this.onRecenter.bind(this)
 
     this.ground.addEventListener('click', this.onGroundClick)
+    this.applyStartAnchorButton.addEventListener('click', this.onApplyStartAnchor)
+    this.destinationSelect?.addEventListener('change', this.onDestinationChange)
+    this.toggleDebugPanelButton?.addEventListener('click', this.onToggleDebugPanel)
     this.calibrateButton.addEventListener('click', this.onCalibrate)
     this.clearCalibrationButton.addEventListener('click', this.onClearCalibration)
     this.resetTriggerButton.addEventListener('click', this.onResetTrigger)
@@ -84,14 +115,24 @@ export const tapPlaceComponent = {
     this.clearButton.addEventListener('click', this.onClearRoute)
     this.recenterButton.addEventListener('click', this.onRecenter)
 
+    this.populateIndoorAnchorOptions()
+    this.restoreSelectedStartAnchor()
+    this.populateDestinationOptions(this.selectedStartAnchorId)
+    this.restoreSelectedIndoorRoute()
     this.restoreCalibrationAnchor()
+    this.restoreDebugPanelCollapsed()
+    this.applyDebugPanelCollapsedState()
     this.renderTriggerMarkers()
+    this.renderIndoorAnchorMarkers()
     this.startGeolocationWatch()
     this.updateDebugPanel()
     this.updateStatus('单路线重复实测模式：等待 gps-test-route 触发')
   },
   remove() {
     this.ground.removeEventListener('click', this.onGroundClick)
+    this.applyStartAnchorButton.removeEventListener('click', this.onApplyStartAnchor)
+    this.destinationSelect?.removeEventListener('change', this.onDestinationChange)
+    this.toggleDebugPanelButton?.removeEventListener('click', this.onToggleDebugPanel)
     this.calibrateButton.removeEventListener('click', this.onCalibrate)
     this.clearCalibrationButton.removeEventListener('click', this.onClearCalibration)
     this.resetTriggerButton.removeEventListener('click', this.onResetTrigger)
@@ -100,7 +141,47 @@ export const tapPlaceComponent = {
     this.clearButton.removeEventListener('click', this.onClearRoute)
     this.recenterButton.removeEventListener('click', this.onRecenter)
     this.triggerEntities.forEach(entity => entity.remove())
+    this.anchorEntities.forEach(entity => entity.remove())
     this.stopGeolocationWatch()
+  },
+  onApplyStartAnchor() {
+    const nextAnchorId = this.startAnchorSelect?.value || ''
+    const nextAnchor = this.findIndoorAnchorById(nextAnchorId)
+    if (!nextAnchor) {
+      this.updateStatus('请选择有效的室内起点锚点')
+      this.lastDiagnostic = 'start-anchor-invalid'
+      this.updateDebugPanel()
+      return
+    }
+
+    this.selectedStartAnchorId = nextAnchor.id
+    this.persistSelectedStartAnchor()
+    this.populateDestinationOptions(nextAnchor.id)
+    this.renderIndoorAnchorMarkers()
+    this.lastDiagnostic = `start-anchor-applied ${nextAnchor.id}`
+    this.updateDebugPanel()
+    this.updateStatus(`已应用室内起点：${nextAnchor.name}`)
+  },
+  onDestinationChange() {
+    const nextRouteId = this.destinationSelect?.value || ''
+    const nextRoute = this.findIndoorRouteById(nextRouteId)
+    if (!nextRoute) {
+      this.selectedIndoorRouteId = null
+      this.clearPersistedSelectedIndoorRoute()
+      this.lastDiagnostic = 'indoor-route-unselected'
+      this.updateDebugPanel()
+      return
+    }
+
+    this.selectedIndoorRouteId = nextRoute.id
+    this.persistSelectedIndoorRoute()
+    this.lastDiagnostic = `indoor-route-selected ${nextRoute.id}`
+    this.updateDebugPanel()
+  },
+  onToggleDebugPanel() {
+    this.debugPanelCollapsed = !this.debugPanelCollapsed
+    this.persistDebugPanelCollapsed()
+    this.applyDebugPanelCollapsedState()
   },
   onCalibrate() {
     if (!this.gpsReady || !this.currentGpsPosition) {
@@ -171,6 +252,7 @@ export const tapPlaceComponent = {
     this.gpsAnchor = null
     this.clearRouteEntities()
     this.renderTriggerMarkers()
+    this.renderIndoorAnchorMarkers()
     this.lastDiagnostic = 'trigger-reset'
 
     if (this.prompt) {
@@ -244,6 +326,27 @@ export const tapPlaceComponent = {
     this.updateStatus(`已撤销，剩余 ${this.routePoints.length} 个点`)
   },
   onStartNavigation() {
+    const selectedAnchor = this.findIndoorAnchorById(this.selectedStartAnchorId)
+    if (selectedAnchor) {
+      const indoorRoute = this.findIndoorRouteById(this.selectedIndoorRouteId)
+      if (!indoorRoute) {
+        this.updateStatus(`请先为起点 ${selectedAnchor.name} 选择目的地`)
+        this.lastDiagnostic = `indoor-route-unselected ${selectedAnchor.id}`
+        this.updateDebugPanel()
+        return
+      }
+
+      if (indoorRoute.startAnchorId !== selectedAnchor.id) {
+        this.updateStatus(`当前目的地不属于起点 ${selectedAnchor.name}，请重新选择`)
+        this.lastDiagnostic = `indoor-route-anchor-mismatch ${indoorRoute.id}`
+        this.updateDebugPanel()
+        return
+      }
+
+      this.loadIndoorRoute(indoorRoute)
+      return
+    }
+
     if (this.routePoints.length < 2) {
       this.updateStatus('至少需要2个点才能开始导航')
       return
@@ -263,6 +366,7 @@ export const tapPlaceComponent = {
     this.nearestTriggerDistance = null
     this.currentTargetIndex = 1
     this.clearRouteEntities()
+    this.renderIndoorAnchorMarkers()
 
     if (this.prompt) {
       this.prompt.textContent = '点击地面设置起点和终点'
@@ -288,6 +392,401 @@ export const tapPlaceComponent = {
     this.el.sceneEl.appendChild(marker)
     this.markerEntities.push(marker)
     this.updateMarkerColors()
+  },
+  populateIndoorAnchorOptions() {
+    if (!this.startAnchorSelect) {
+      return
+    }
+
+    const optionsMarkup = ['<option value="">请选择起点锚点</option>']
+    this.indoorAnchors.forEach((anchor) => {
+      optionsMarkup.push(`<option value="${anchor.id}">${anchor.name}</option>`)
+    })
+    this.startAnchorSelect.innerHTML = optionsMarkup.join('')
+  },
+  populateDestinationOptions(anchorId) {
+    if (!this.destinationSelect) {
+      return
+    }
+
+    const routes = this.findIndoorRoutesByStartAnchor(anchorId)
+    const optionsMarkup = ['<option value="">请选择目的地</option>']
+    routes.forEach((route) => {
+      optionsMarkup.push(`<option value="${route.id}">${route.destinationName}</option>`)
+    })
+    this.destinationSelect.innerHTML = optionsMarkup.join('')
+
+    if (routes.length === 0) {
+      this.selectedIndoorRouteId = null
+      this.clearPersistedSelectedIndoorRoute()
+      return
+    }
+
+    const matchedRoute = routes.find(route => route.id === this.selectedIndoorRouteId)
+    const nextRoute = matchedRoute || routes[0]
+    this.selectedIndoorRouteId = nextRoute.id
+    this.destinationSelect.value = nextRoute.id
+    this.persistSelectedIndoorRoute()
+  },
+  findIndoorAnchorById(anchorId) {
+    return this.indoorAnchors.find(anchor => anchor.id === anchorId) || null
+  },
+  findIndoorRoutesByStartAnchor(anchorId) {
+    if (!anchorId) {
+      return []
+    }
+
+    return this.indoorRoutes.filter(route => route.startAnchorId === anchorId)
+  },
+  findIndoorRouteById(routeId) {
+    return this.indoorRoutes.find(route => route.id === routeId) || null
+  },
+  persistSelectedStartAnchor() {
+    if (!this.selectedStartAnchorId || typeof window === 'undefined' || !window.localStorage) {
+      return
+    }
+
+    window.localStorage.setItem(START_ANCHOR_STORAGE_KEY, this.selectedStartAnchorId)
+  },
+  persistSelectedIndoorRoute() {
+    if (!this.selectedIndoorRouteId || typeof window === 'undefined' || !window.localStorage) {
+      return
+    }
+
+    window.localStorage.setItem(INDOOR_ROUTE_STORAGE_KEY, this.selectedIndoorRouteId)
+  },
+  restoreSelectedStartAnchor() {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return
+    }
+
+    const storedAnchorId = window.localStorage.getItem(START_ANCHOR_STORAGE_KEY)
+    if (!storedAnchorId || !this.findIndoorAnchorById(storedAnchorId)) {
+      return
+    }
+
+    this.selectedStartAnchorId = storedAnchorId
+    if (this.startAnchorSelect) {
+      this.startAnchorSelect.value = storedAnchorId
+    }
+    this.lastDiagnostic = `start-anchor-restored ${storedAnchorId}`
+  },
+  restoreSelectedIndoorRoute() {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return
+    }
+
+    const storedRouteId = window.localStorage.getItem(INDOOR_ROUTE_STORAGE_KEY)
+    if (!storedRouteId) {
+      return
+    }
+
+    const storedRoute = this.findIndoorRouteById(storedRouteId)
+    if (!storedRoute || storedRoute.startAnchorId !== this.selectedStartAnchorId) {
+      return
+    }
+
+    this.selectedIndoorRouteId = storedRouteId
+    if (this.destinationSelect) {
+      this.destinationSelect.value = storedRouteId
+    }
+    this.lastDiagnostic = `indoor-route-restored ${storedRouteId}`
+  },
+  clearPersistedSelectedIndoorRoute() {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return
+    }
+
+    window.localStorage.removeItem(INDOOR_ROUTE_STORAGE_KEY)
+  },
+  persistDebugPanelCollapsed() {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return
+    }
+
+    window.localStorage.setItem(DEBUG_PANEL_COLLAPSED_KEY, this.debugPanelCollapsed ? '1' : '0')
+  },
+  restoreDebugPanelCollapsed() {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return
+    }
+
+    this.debugPanelCollapsed = window.localStorage.getItem(DEBUG_PANEL_COLLAPSED_KEY) === '1'
+  },
+  applyDebugPanelCollapsedState() {
+    if (this.debugPanel) {
+      this.debugPanel.classList.toggle('collapsed', this.debugPanelCollapsed)
+    }
+
+    if (this.toggleDebugPanelButton) {
+      this.toggleDebugPanelButton.textContent = this.debugPanelCollapsed ? '展开' : '折叠'
+    }
+  },
+  renderIndoorAnchorMarkers() {
+    this.anchorEntities.forEach(entity => entity.remove())
+    this.anchorEntities = []
+
+    this.indoorAnchors.forEach((anchor) => {
+      const isSelected = anchor.id === this.selectedStartAnchorId
+      const marker = document.createElement('a-entity')
+      marker.setAttribute(
+        'position',
+        `${anchor.scenePoint.x} ${anchor.scenePoint.y} ${anchor.scenePoint.z}`
+      )
+
+      const ring = document.createElement('a-ring')
+      ring.setAttribute('position', '0 0.03 0')
+      ring.setAttribute('rotation', '-90 0 0')
+      ring.setAttribute('radius-inner', isSelected ? 0.48 : 0.34)
+      ring.setAttribute('radius-outer', isSelected ? 0.72 : 0.54)
+      ring.setAttribute(
+        'material',
+        `color: ${isSelected ? '#31d17c' : '#a7f3d0'}; opacity: 0.92; emissive: ${isSelected ? '#1a633f' : '#14532d'}; emissiveIntensity: 0.45`
+      )
+
+      const pillar = document.createElement('a-cylinder')
+      pillar.setAttribute('position', '0 0.55 0')
+      pillar.setAttribute('radius', 0.05)
+      pillar.setAttribute('height', isSelected ? 1.2 : 0.9)
+      pillar.setAttribute(
+        'material',
+        `color: ${isSelected ? '#31d17c' : '#d1fae5'}; opacity: 0.9; emissive: ${isSelected ? '#14532d' : '#166534'}; emissiveIntensity: 0.35`
+      )
+
+      const label = this.createFloatingLabel({
+        text: anchor.name,
+        y: isSelected ? 1.45 : 1.2,
+        width: Math.max(1.1, anchor.name.length * 0.42),
+        textWidth: Math.max(3.4, anchor.name.length * 1.3),
+        backgroundColor: isSelected ? '#166534' : '#14532d',
+        textColor: '#f0fdf4',
+      })
+
+      marker.appendChild(ring)
+      marker.appendChild(pillar)
+      marker.appendChild(label)
+      this.el.sceneEl.appendChild(marker)
+      this.anchorEntities.push(marker)
+    })
+
+    this.getIndoorDestinationMarkers().forEach((destination) => {
+      const marker = this.createIndoorDestinationMarker(destination)
+      this.el.sceneEl.appendChild(marker)
+      this.anchorEntities.push(marker)
+    })
+  },
+  getIndoorDestinationMarkers() {
+    const dedupedDestinations = new Map()
+
+    this.indoorRoutes.forEach((route) => {
+      const endpoint = route.points?.[route.points.length - 1]
+      if (!endpoint) {
+        return
+      }
+
+      const key = `${route.destinationName}:${endpoint.x}:${endpoint.y}:${endpoint.z}`
+      if (!dedupedDestinations.has(key)) {
+        dedupedDestinations.set(key, {
+          routeId: route.id,
+          destinationName: route.destinationName,
+          point: endpoint,
+        })
+      }
+    })
+
+    return [...dedupedDestinations.values()]
+  },
+  createIndoorDestinationMarker(destination) {
+    const isSelected = destination.routeId === this.selectedIndoorRouteId
+    const palette = this.getIndoorDestinationPalette(destination.destinationName)
+    const marker = document.createElement('a-entity')
+    marker.setAttribute(
+      'position',
+      `${destination.point.x} ${destination.point.y} ${destination.point.z}`
+    )
+
+    const ring = document.createElement('a-ring')
+    ring.setAttribute('position', '0 0.03 0')
+    ring.setAttribute('rotation', '-90 0 0')
+    ring.setAttribute('radius-inner', isSelected ? 0.26 : 0.18)
+    ring.setAttribute('radius-outer', isSelected ? 0.46 : 0.34)
+    ring.setAttribute(
+      'material',
+      `color: ${isSelected ? palette.activeRing : palette.ring}; opacity: 0.94; emissive: ${isSelected ? palette.activeEmissive : palette.emissive}; emissiveIntensity: 0.42`
+    )
+
+    const pillar = document.createElement('a-cylinder')
+    pillar.setAttribute('position', '0 0.42 0')
+    pillar.setAttribute('radius', 0.04)
+    pillar.setAttribute('height', isSelected ? 0.92 : 0.72)
+    pillar.setAttribute(
+      'material',
+      `color: ${isSelected ? palette.activePillar : palette.pillar}; opacity: 0.96; emissive: ${isSelected ? palette.activeEmissive : palette.emissive}; emissiveIntensity: 0.24`
+    )
+
+    const labelBg = document.createElement('a-plane')
+    const label = this.createFloatingLabel({
+      text: destination.destinationName,
+      y: isSelected ? 1.42 : 1.22,
+      width: Math.max(1.05, destination.destinationName.length * 0.42),
+      textWidth: Math.max(3.2, destination.destinationName.length * 1.25),
+      backgroundColor: isSelected ? palette.activeLabel : palette.label,
+      textColor: '#fff7ed',
+      emissiveColor: palette.labelEmissive,
+    })
+
+    marker.appendChild(ring)
+    marker.appendChild(pillar)
+    marker.appendChild(label)
+    return marker
+  },
+  createFloatingLabel({
+    text,
+    y = 1.2,
+    width = 1.1,
+    height = 0.42,
+    textWidth = 3.2,
+    backgroundColor = '#1f2937',
+    textColor = '#ffffff',
+    emissiveColor = '#111827',
+  }) {
+    const labelBg = document.createElement('a-plane')
+    labelBg.setAttribute('position', `0 ${y} 0`)
+    labelBg.setAttribute('width', width)
+    labelBg.setAttribute('height', height)
+    labelBg.setAttribute(
+      'material',
+      `color: ${backgroundColor}; side: double; opacity: 0.92; emissive: ${emissiveColor}; emissiveIntensity: 0.24`
+    )
+
+    const labelText = document.createElement('a-text')
+    labelText.setAttribute('value', text)
+    labelText.setAttribute('position', '0 0 0.01')
+    labelText.setAttribute('align', 'center')
+    labelText.setAttribute('anchor', 'center')
+    labelText.setAttribute('baseline', 'center')
+    labelText.setAttribute('color', textColor)
+    labelText.setAttribute('width', textWidth)
+
+    labelBg.appendChild(labelText)
+    return labelBg
+  },
+  getIndoorDestinationPalette(destinationName) {
+    const paletteByDestination = {
+      '服务台': {
+        ring: '#60a5fa',
+        activeRing: '#2563eb',
+        emissive: '#1d4ed8',
+        activeEmissive: '#1e3a8a',
+        pillar: '#dbeafe',
+        activePillar: '#93c5fd',
+        label: '#1d4ed8',
+        activeLabel: '#1e40af',
+        labelEmissive: '#172554',
+      },
+      '电梯口': {
+        ring: '#a78bfa',
+        activeRing: '#7c3aed',
+        emissive: '#6d28d9',
+        activeEmissive: '#4c1d95',
+        pillar: '#ede9fe',
+        activePillar: '#c4b5fd',
+        label: '#6d28d9',
+        activeLabel: '#5b21b6',
+        labelEmissive: '#2e1065',
+      },
+      '内科': {
+        ring: '#34d399',
+        activeRing: '#059669',
+        emissive: '#047857',
+        activeEmissive: '#064e3b',
+        pillar: '#d1fae5',
+        activePillar: '#6ee7b7',
+        label: '#047857',
+        activeLabel: '#065f46',
+        labelEmissive: '#022c22',
+      },
+      '外科': {
+        ring: '#f87171',
+        activeRing: '#dc2626',
+        emissive: '#b91c1c',
+        activeEmissive: '#7f1d1d',
+        pillar: '#fee2e2',
+        activePillar: '#fca5a5',
+        label: '#b91c1c',
+        activeLabel: '#991b1b',
+        labelEmissive: '#450a0a',
+      },
+      '检验科': {
+        ring: '#22d3ee',
+        activeRing: '#0891b2',
+        emissive: '#0e7490',
+        activeEmissive: '#164e63',
+        pillar: '#cffafe',
+        activePillar: '#67e8f9',
+        label: '#0e7490',
+        activeLabel: '#155e75',
+        labelEmissive: '#083344',
+      },
+      '药房': {
+        ring: '#fbbf24',
+        activeRing: '#d97706',
+        emissive: '#b45309',
+        activeEmissive: '#78350f',
+        pillar: '#fef3c7',
+        activePillar: '#fcd34d',
+        label: '#b45309',
+        activeLabel: '#92400e',
+        labelEmissive: '#451a03',
+      },
+    }
+
+    return paletteByDestination[destinationName] || {
+      ring: '#fb923c',
+      activeRing: '#f97316',
+      emissive: '#7c2d12',
+      activeEmissive: '#9a3412',
+      pillar: '#ffedd5',
+      activePillar: '#fdba74',
+      label: '#7c2d12',
+      activeLabel: '#ea580c',
+      labelEmissive: '#431407',
+    }
+  },
+  loadIndoorRoute(route) {
+    this.navigationActive = false
+    this.currentTargetIndex = 1
+    this.activeTriggerId = route.id
+    this.triggerLockId = null
+    this.clearRouteEntities()
+
+    this.routePoints = route.points.map(point => ({...point}))
+    this.routePoints.forEach(point => this.addMarker(point))
+    this.renderRoute()
+
+    if (this.routePoints[0]) {
+      this.addStartFlag(this.routePoints[0])
+      this.addDiagnosticBeacon(this.routePoints[0], '#22c55e')
+    }
+    if (this.routePoints.length > 0) {
+      const destinationPoint = this.routePoints[this.routePoints.length - 1]
+      this.addDestinationFlag(destinationPoint, route.destinationName)
+    }
+
+    if (route.autoStart && this.routePoints.length >= 2) {
+      this.navigationActive = true
+      this.updateMarkerColors()
+      this.updateStatus(`室内导航开始，前往 ${route.destinationName}`)
+    } else {
+      this.updateStatus(`已加载室内路线，目标：${route.destinationName}`)
+    }
+
+    if (this.prompt) {
+      this.prompt.textContent = `室内路线：${route.destinationName}`
+    }
+
+    this.lastDiagnostic = `indoor-route-loaded ${route.id}`
+    this.updateDebugPanel()
   },
   renderTriggerMarkers() {
     this.triggerEntities.forEach(entity => entity.remove())
@@ -396,6 +895,55 @@ export const tapPlaceComponent = {
     this.el.sceneEl.appendChild(beacon)
     this.routeEntities.push(beacon)
   },
+  addDestinationFlag(point, destinationName) {
+    const palette = this.getIndoorDestinationPalette(destinationName)
+    const flag = document.createElement('a-entity')
+    flag.setAttribute('position', `${point.x} ${point.y} ${point.z}`)
+
+    const ring = document.createElement('a-ring')
+    ring.setAttribute('position', '0 0.03 0')
+    ring.setAttribute('rotation', '-90 0 0')
+    ring.setAttribute('radius-inner', 0.42)
+    ring.setAttribute('radius-outer', 0.72)
+    ring.setAttribute(
+      'material',
+      `color: ${palette.activeRing}; opacity: 0.95; emissive: ${palette.activeEmissive}; emissiveIntensity: 0.5`
+    )
+
+    const pillar = document.createElement('a-cylinder')
+    pillar.setAttribute('position', '0 0.95 0')
+    pillar.setAttribute('radius', 0.05)
+    pillar.setAttribute('height', 1.9)
+    pillar.setAttribute(
+      'material',
+      `color: ${palette.activePillar}; opacity: 0.96; emissive: ${palette.activeEmissive}; emissiveIntensity: 0.26`
+    )
+
+    const labelBg = document.createElement('a-plane')
+    labelBg.setAttribute('position', '0 1.95 0')
+    labelBg.setAttribute('width', Math.max(1.15, destinationName.length * 0.5))
+    labelBg.setAttribute('height', 0.5)
+    labelBg.setAttribute(
+      'material',
+      `color: ${palette.activeLabel}; side: double; opacity: 0.95; emissive: ${palette.labelEmissive}; emissiveIntensity: 0.28`
+    )
+
+    const labelText = document.createElement('a-text')
+    labelText.setAttribute('value', destinationName)
+    labelText.setAttribute('position', '0 0 0.01')
+    labelText.setAttribute('align', 'center')
+    labelText.setAttribute('anchor', 'center')
+    labelText.setAttribute('baseline', 'center')
+    labelText.setAttribute('color', '#fff7ed')
+    labelText.setAttribute('width', Math.max(3.4, destinationName.length * 1.35))
+
+    labelBg.appendChild(labelText)
+    flag.appendChild(ring)
+    flag.appendChild(pillar)
+    flag.appendChild(labelBg)
+    this.el.sceneEl.appendChild(flag)
+    this.routeEntities.push(flag)
+  },
   clearRouteEntities() {
     this.routePoints = []
     this.markerEntities.forEach(entity => entity.remove())
@@ -470,6 +1018,11 @@ export const tapPlaceComponent = {
     return routeMode === 'scene' || this.shouldUseSceneFallback(route)
   },
   getRouteSceneAnchor(trigger) {
+    const selectedAnchor = this.findIndoorAnchorById(this.selectedStartAnchorId)
+    if (selectedAnchor?.scenePoint) {
+      return {...selectedAnchor.scenePoint}
+    }
+
     if (this.getRoutePositionMode(trigger) === 'gps' && this.calibrationAnchor?.scene) {
       return {...this.calibrationAnchor.scene}
     }
@@ -804,6 +1357,14 @@ export const tapPlaceComponent = {
       this.debugModeText.textContent = `Mode: ${mode} | GPS ready: ${this.gpsReady ? 'yes' : 'no'} | GPS gate: ${gpsGate} | Calibrated: ${calibrated}`
     }
 
+    if (this.debugStartAnchorText) {
+      const selectedAnchor = this.findIndoorAnchorById(this.selectedStartAnchorId)
+      const selectedRoute = this.findIndoorRouteById(this.selectedIndoorRouteId)
+      this.debugStartAnchorText.textContent = selectedAnchor
+        ? `StartAnchor: ${selectedAnchor.name} (${selectedAnchor.id}) | Destination: ${selectedRoute ? selectedRoute.destinationName : '-'}`
+        : 'StartAnchor: -'
+    }
+
     if (this.debugTriggerText) {
       const nearestLabel = this.nearestTriggerId
         ? `${this.nearestTriggerId} (${this.nearestTriggerDistance.toFixed(2)}m)`
@@ -822,7 +1383,9 @@ export const tapPlaceComponent = {
       const anchorSummary = this.gpsAnchor
         ? ` | Anchor: ${this.gpsAnchor.routeId} @ ${this.gpsAnchor.scene.x.toFixed(1)},${this.gpsAnchor.scene.z.toFixed(1)}${this.gpsAnchor.calibrated ? ' calibrated' : ''}`
         : ''
-      this.debugRouteText.textContent = `Route: ${activeRoute} | TestOnly: ${SINGLE_ROUTE_TEST_ID} | Fired: ${firedSummary}${anchorSummary}`
+      const indoorRoute = this.findIndoorRouteById(this.selectedIndoorRouteId)
+      const indoorSummary = indoorRoute ? ` | IndoorRoute: ${indoorRoute.id} -> ${indoorRoute.destinationName}` : ''
+      this.debugRouteText.textContent = `Route: ${activeRoute} | TestOnly: ${SINGLE_ROUTE_TEST_ID}${indoorSummary} | Fired: ${firedSummary}${anchorSummary}`
     }
 
     if (this.debugGpsText) {

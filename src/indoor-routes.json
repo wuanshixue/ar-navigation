@@ -1,0 +1,93 @@
+[
+  {
+    "id": "route-from-entrance-a",
+    "startAnchorId": "entrance-a",
+    "destinationName": "服务台",
+    "floorId": "f1",
+    "autoStart": true,
+    "points": [
+      {"x": 0, "y": 0.05, "z": -1.4},
+      {"x": 2.0, "y": 0.05, "z": -3.3},
+      {"x": 4.1, "y": 0.05, "z": -5.2},
+      {"x": 6.6, "y": 0.05, "z": -7.3}
+    ]
+  },
+  {
+    "id": "route-from-front-desk",
+    "startAnchorId": "front-desk",
+    "destinationName": "电梯口",
+    "floorId": "f1",
+    "autoStart": true,
+    "points": [
+      {"x": 3.2, "y": 0.05, "z": -4.2},
+      {"x": 1.1, "y": 0.05, "z": -5.4},
+      {"x": -1.0, "y": 0.05, "z": -5.7},
+      {"x": -2.8, "y": 0.05, "z": -5.8}
+    ]
+  },
+  {
+    "id": "route-front-desk-internal-medicine",
+    "startAnchorId": "front-desk",
+    "destinationName": "内科",
+    "floorId": "f1",
+    "autoStart": true,
+    "points": [
+      {"x": 3.2, "y": 0.05, "z": -4.2},
+      {"x": 5.6, "y": 0.05, "z": -4.0},
+      {"x": 8.5, "y": 0.05, "z": -3.2},
+      {"x": 12.4, "y": 0.05, "z": -1.8}
+    ]
+  },
+  {
+    "id": "route-front-desk-surgery",
+    "startAnchorId": "front-desk",
+    "destinationName": "外科",
+    "floorId": "f1",
+    "autoStart": true,
+    "points": [
+      {"x": 3.2, "y": 0.05, "z": -4.2},
+      {"x": 2.8, "y": 0.05, "z": -6.3},
+      {"x": 1.7, "y": 0.05, "z": -9.3},
+      {"x": -0.2, "y": 0.05, "z": -13.5}
+    ]
+  },
+  {
+    "id": "route-front-desk-lab",
+    "startAnchorId": "front-desk",
+    "destinationName": "检验科",
+    "floorId": "f1",
+    "autoStart": true,
+    "points": [
+      {"x": 3.2, "y": 0.05, "z": -4.2},
+      {"x": 4.6, "y": 0.05, "z": -6.0},
+      {"x": 7.1, "y": 0.05, "z": -8.3},
+      {"x": 10.8, "y": 0.05, "z": -10.2}
+    ]
+  },
+  {
+    "id": "route-front-desk-pharmacy",
+    "startAnchorId": "front-desk",
+    "destinationName": "药房",
+    "floorId": "f1",
+    "autoStart": true,
+    "points": [
+      {"x": 3.2, "y": 0.05, "z": -4.2},
+      {"x": 1.8, "y": 0.05, "z": -2.8},
+      {"x": -0.9, "y": 0.05, "z": -1.7},
+      {"x": -5.1, "y": 0.05, "z": -1.0}
+    ]
+  },
+  {
+    "id": "route-from-elevator-lobby",
+    "startAnchorId": "elevator-lobby",
+    "destinationName": "入口A",
+    "floorId": "f1",
+    "autoStart": true,
+    "points": [
+      {"x": -2.8, "y": 0.05, "z": -5.8},
+      {"x": -1.4, "y": 0.05, "z": -4.6},
+      {"x": -0.6, "y": 0.05, "z": -3.2},
+      {"x": 0, "y": 0.05, "z": -1.4}
+    ]
+  }
+]
