@@ -46,6 +46,7 @@ export const tapPlaceComponent = {
     this.routeEntities = []
     this.triggerEntities = []
     this.anchorEntities = []
+    this.billboardEntities = []
     this.navigationActive = false
     this.currentTargetIndex = 1
     this.indoorAnchors = indoorAnchors.map(anchor => ({
@@ -184,16 +185,10 @@ export const tapPlaceComponent = {
     this.applyDebugPanelCollapsedState()
   },
   onCalibrate() {
-    if (!this.gpsReady || !this.currentGpsPosition) {
-      this.updateStatus('定位尚未就绪，暂时无法校准')
-      this.lastDiagnostic = 'calibrate-failed gps-not-ready'
-      this.updateDebugPanel()
-      return
-    }
-
-    if (!this.isGpsAccurateEnoughForCalibration()) {
-      this.updateStatus(`当前定位精度 ${this.gpsAccuracy.toFixed(1)}m，超过校准阈值 ${GPS_CALIBRATION_ACCURACY_THRESHOLD}m`)
-      this.lastDiagnostic = `calibrate-failed accuracy=${this.gpsAccuracy.toFixed(1)}`
+    const selectedAnchor = this.findIndoorAnchorById(this.selectedStartAnchorId)
+    if (!selectedAnchor) {
+      this.updateStatus('请先选择室内起点锚点，再执行校准')
+      this.lastDiagnostic = 'calibrate-failed start-anchor-missing'
       this.updateDebugPanel()
       return
     }
@@ -217,7 +212,9 @@ export const tapPlaceComponent = {
       : 0
 
     this.calibrationAnchor = {
-      gps: {...this.currentGpsPosition},
+      type: 'indoor-anchor',
+      anchorId: selectedAnchor.id,
+      anchorName: selectedAnchor.name,
       scene: {
         x: this.tempCam.x,
         y: 0.05,
@@ -228,9 +225,9 @@ export const tapPlaceComponent = {
     }
 
     this.persistCalibrationAnchor()
-    this.lastDiagnostic = `calibrated ${this.currentGpsPosition.lat.toFixed(6)},${this.currentGpsPosition.lng.toFixed(6)}`
+    this.lastDiagnostic = `calibrated ${selectedAnchor.id} @ ${this.tempCam.x.toFixed(1)},${this.tempCam.z.toFixed(1)}`
     this.updateDebugPanel()
-    this.updateStatus('定位校准成功，后续 GPS 路线将优先使用当前锚点')
+    this.updateStatus(`室内锚点校准成功：${selectedAnchor.name}`)
   },
   onClearCalibration() {
     this.calibrationAnchor = null
@@ -651,6 +648,7 @@ export const tapPlaceComponent = {
     emissiveColor = '#111827',
   }) {
     const labelBg = document.createElement('a-plane')
+    labelBg.classList.add('billboard-label')
     labelBg.setAttribute('position', `0 ${y} 0`)
     labelBg.setAttribute('width', width)
     labelBg.setAttribute('height', height)
@@ -669,7 +667,32 @@ export const tapPlaceComponent = {
     labelText.setAttribute('width', textWidth)
 
     labelBg.appendChild(labelText)
+    this.billboardEntities.push(labelBg)
     return labelBg
+  },
+  updateBillboardLabels() {
+    if (!this.camera || !this.camera.object3D || this.billboardEntities.length === 0) {
+      return
+    }
+
+    this.camera.object3D.getWorldPosition(this.tempCam)
+    this.billboardEntities = this.billboardEntities.filter(entity => entity?.isConnected)
+
+    this.billboardEntities.forEach((entity) => {
+      if (!entity.object3D) {
+        return
+      }
+
+      entity.object3D.getWorldPosition(this.tempTarget)
+      const dx = this.tempCam.x - this.tempTarget.x
+      const dz = this.tempCam.z - this.tempTarget.z
+      if (Math.abs(dx) < 0.0001 && Math.abs(dz) < 0.0001) {
+        return
+      }
+
+      const yaw = Math.atan2(dx, dz) * (180 / Math.PI)
+      entity.object3D.rotation.set(0, yaw * (Math.PI / 180), 0)
+    })
   },
   getIndoorDestinationPalette(destinationName) {
     const paletteByDestination = {
@@ -760,7 +783,7 @@ export const tapPlaceComponent = {
     this.triggerLockId = null
     this.clearRouteEntities()
 
-    this.routePoints = route.points.map(point => ({...point}))
+    this.routePoints = this.getIndoorRouteScenePoints(route)
     this.routePoints.forEach(point => this.addMarker(point))
     this.renderRoute()
 
@@ -785,7 +808,7 @@ export const tapPlaceComponent = {
       this.prompt.textContent = `室内路线：${route.destinationName}`
     }
 
-    this.lastDiagnostic = `indoor-route-loaded ${route.id}`
+    this.lastDiagnostic = `indoor-route-loaded ${route.id}${this.calibrationAnchor?.anchorId === route.startAnchorId ? ' calibrated' : ''}`
     this.updateDebugPanel()
   },
   renderTriggerMarkers() {
@@ -900,32 +923,63 @@ export const tapPlaceComponent = {
     const flag = document.createElement('a-entity')
     flag.setAttribute('position', `${point.x} ${point.y} ${point.z}`)
 
+    const pulseHalo = document.createElement('a-ring')
+    pulseHalo.setAttribute('position', '0 0.04 0')
+    pulseHalo.setAttribute('rotation', '-90 0 0')
+    pulseHalo.setAttribute('radius-inner', 0.76)
+    pulseHalo.setAttribute('radius-outer', 1.08)
+    pulseHalo.setAttribute(
+      'material',
+      `color: ${palette.activeRing}; opacity: 0.34; emissive: ${palette.activeEmissive}; emissiveIntensity: 0.82`
+    )
+    pulseHalo.setAttribute(
+      'animation__pulse',
+      'property: scale; dir: alternate; dur: 1100; easing: easeInOutSine; loop: true; to: 1.2 1.2 1.2'
+    )
+    pulseHalo.setAttribute(
+      'animation__fade',
+      'property: material.opacity; dir: alternate; dur: 1100; easing: easeInOutSine; loop: true; to: 0.14'
+    )
+
     const ring = document.createElement('a-ring')
     ring.setAttribute('position', '0 0.03 0')
     ring.setAttribute('rotation', '-90 0 0')
-    ring.setAttribute('radius-inner', 0.42)
-    ring.setAttribute('radius-outer', 0.72)
+    ring.setAttribute('radius-inner', 0.5)
+    ring.setAttribute('radius-outer', 0.88)
     ring.setAttribute(
       'material',
-      `color: ${palette.activeRing}; opacity: 0.95; emissive: ${palette.activeEmissive}; emissiveIntensity: 0.5`
+      `color: ${palette.activeRing}; opacity: 0.98; emissive: ${palette.activeEmissive}; emissiveIntensity: 0.68`
     )
 
     const pillar = document.createElement('a-cylinder')
-    pillar.setAttribute('position', '0 0.95 0')
-    pillar.setAttribute('radius', 0.05)
-    pillar.setAttribute('height', 1.9)
+    pillar.setAttribute('position', '0 1.18 0')
+    pillar.setAttribute('radius', 0.06)
+    pillar.setAttribute('height', 2.35)
     pillar.setAttribute(
       'material',
-      `color: ${palette.activePillar}; opacity: 0.96; emissive: ${palette.activeEmissive}; emissiveIntensity: 0.26`
+      `color: ${palette.activePillar}; opacity: 0.98; emissive: ${palette.activeEmissive}; emissiveIntensity: 0.34`
+    )
+    pillar.setAttribute(
+      'animation__glow',
+      'property: material.emissiveIntensity; dir: alternate; dur: 1100; easing: easeInOutSine; loop: true; to: 0.58'
+    )
+
+    const beacon = document.createElement('a-cylinder')
+    beacon.setAttribute('position', '0 1.38 0')
+    beacon.setAttribute('radius', 0.11)
+    beacon.setAttribute('height', 2.8)
+    beacon.setAttribute(
+      'material',
+      `color: ${palette.activeRing}; opacity: 0.16; emissive: ${palette.activeEmissive}; emissiveIntensity: 0.92`
     )
 
     const labelBg = document.createElement('a-plane')
-    labelBg.setAttribute('position', '0 1.95 0')
-    labelBg.setAttribute('width', Math.max(1.15, destinationName.length * 0.5))
-    labelBg.setAttribute('height', 0.5)
+    labelBg.setAttribute('position', '0 2.35 0')
+    labelBg.setAttribute('width', Math.max(1.35, destinationName.length * 0.58))
+    labelBg.setAttribute('height', 0.6)
     labelBg.setAttribute(
       'material',
-      `color: ${palette.activeLabel}; side: double; opacity: 0.95; emissive: ${palette.labelEmissive}; emissiveIntensity: 0.28`
+      `color: ${palette.activeLabel}; side: double; opacity: 0.98; emissive: ${palette.labelEmissive}; emissiveIntensity: 0.34`
     )
 
     const labelText = document.createElement('a-text')
@@ -935,11 +989,13 @@ export const tapPlaceComponent = {
     labelText.setAttribute('anchor', 'center')
     labelText.setAttribute('baseline', 'center')
     labelText.setAttribute('color', '#fff7ed')
-    labelText.setAttribute('width', Math.max(3.4, destinationName.length * 1.35))
+    labelText.setAttribute('width', Math.max(4.1, destinationName.length * 1.6))
 
     labelBg.appendChild(labelText)
+    flag.appendChild(pulseHalo)
     flag.appendChild(ring)
     flag.appendChild(pillar)
+    flag.appendChild(beacon)
     flag.appendChild(labelBg)
     this.el.sceneEl.appendChild(flag)
     this.routeEntities.push(flag)
@@ -1054,6 +1110,56 @@ export const tapPlaceComponent = {
       z: basePoint.z,
     }
   },
+  getAnchorForwardAngle(anchor) {
+    const forwardX = anchor?.forward?.x ?? 0
+    const forwardZ = anchor?.forward?.z ?? -1
+    const horizontalLength = Math.sqrt(forwardX * forwardX + forwardZ * forwardZ)
+    if (horizontalLength <= 0.001) {
+      return -Math.PI / 2
+    }
+
+    return Math.atan2(forwardZ / horizontalLength, forwardX / horizontalLength)
+  },
+  rotateSceneOffset(offset, transformAngle) {
+    const cosAngle = Math.cos(transformAngle)
+    const sinAngle = Math.sin(transformAngle)
+    return {
+      x: offset.x * cosAngle - offset.z * sinAngle,
+      z: offset.x * sinAngle + offset.z * cosAngle,
+    }
+  },
+  getIndoorRouteScenePoints(route) {
+    const sourceAnchor = this.findIndoorAnchorById(route.startAnchorId)
+    if (!sourceAnchor?.scenePoint) {
+      return (route.points || []).map(point => ({...point}))
+    }
+
+    const canUseIndoorCalibration =
+      this.calibrationAnchor
+      && this.calibrationAnchor.type === 'indoor-anchor'
+      && this.calibrationAnchor.anchorId === route.startAnchorId
+
+    if (!canUseIndoorCalibration) {
+      return (route.points || []).map(point => ({...point}))
+    }
+
+    const baseAngle = this.getAnchorForwardAngle(sourceAnchor)
+    const transformAngle = this.calibrationAnchor.sceneForwardAngle - baseAngle
+    const anchorScene = this.calibrationAnchor.scene
+
+    return route.points.map((point) => {
+      const offset = {
+        x: point.x - sourceAnchor.scenePoint.x,
+        z: point.z - sourceAnchor.scenePoint.z,
+      }
+      const rotatedOffset = this.rotateSceneOffset(offset, transformAngle)
+      return {
+        x: anchorScene.x + rotatedOffset.x,
+        y: point.y ?? anchorScene.y ?? 0.05,
+        z: anchorScene.z + rotatedOffset.z,
+      }
+    })
+  },
   persistCalibrationAnchor() {
     if (!this.calibrationAnchor || typeof window === 'undefined' || !window.localStorage) {
       return
@@ -1082,16 +1188,21 @@ export const tapPlaceComponent = {
       const parsedAnchor = JSON.parse(rawAnchor)
       if (
         parsedAnchor
-        && parsedAnchor.gps
-        && typeof parsedAnchor.gps.lat === 'number'
-        && typeof parsedAnchor.gps.lng === 'number'
         && parsedAnchor.scene
         && typeof parsedAnchor.scene.x === 'number'
         && typeof parsedAnchor.scene.z === 'number'
         && typeof parsedAnchor.sceneForwardAngle === 'number'
       ) {
         this.calibrationAnchor = parsedAnchor
-        this.lastDiagnostic = `calibration-restored ${parsedAnchor.gps.lat.toFixed(6)},${parsedAnchor.gps.lng.toFixed(6)}`
+        if (parsedAnchor.type === 'indoor-anchor' && parsedAnchor.anchorId) {
+          this.lastDiagnostic = `calibration-restored ${parsedAnchor.anchorId}`
+        } else if (
+          parsedAnchor.gps
+          && typeof parsedAnchor.gps.lat === 'number'
+          && typeof parsedAnchor.gps.lng === 'number'
+        ) {
+          this.lastDiagnostic = `calibration-restored ${parsedAnchor.gps.lat.toFixed(6)},${parsedAnchor.gps.lng.toFixed(6)}`
+        }
       }
     } catch (error) {
       this.clearPersistedCalibrationAnchor()
@@ -1399,6 +1510,15 @@ export const tapPlaceComponent = {
     if (this.debugCalibrationText) {
       if (!this.calibrationAnchor) {
         this.debugCalibrationText.textContent = 'Calibration: -'
+      } else if (this.calibrationAnchor.type === 'indoor-anchor') {
+        const calibrationTime = this.calibrationAnchor.updatedAt
+          ? new Date(this.calibrationAnchor.updatedAt).toLocaleTimeString()
+          : '-'
+        this.debugCalibrationText.textContent =
+          `Calibration: ${this.calibrationAnchor.anchorName || this.calibrationAnchor.anchorId}`
+          + ` | Scene: ${this.calibrationAnchor.scene.x.toFixed(1)}, ${this.calibrationAnchor.scene.z.toFixed(1)}`
+          + ` | Angle: ${this.calibrationAnchor.sceneForwardAngle.toFixed(2)}`
+          + ` | Saved: ${calibrationTime}`
       } else {
         const calibrationTime = this.calibrationAnchor.updatedAt
           ? new Date(this.calibrationAnchor.updatedAt).toLocaleTimeString()
@@ -1594,6 +1714,7 @@ export const tapPlaceComponent = {
     })
   },
   tick() {
+    this.updateBillboardLabels()
     this.checkTriggerRoutes()
 
     if (!this.navigationActive || this.routePoints.length < 2 || !this.camera || !this.camera.object3D) {
